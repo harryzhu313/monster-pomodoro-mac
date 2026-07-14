@@ -5,7 +5,7 @@
 
 ## 1. 项目背景
 
-把 Chrome 插件版番茄钟(Tomato Monster · 按时停下来)重做为 macOS 菜单栏应用。产品哲学与视觉语言继承插件版:按时停下来、加时有代价、奖励"停下来"。旧插件代码位于 `/Users/apple/web-projects/tomato-timer-v2`,可作功能与交互的参考基准。
+把 Chrome 插件版番茄钟(Tomato Monster · 按时停下来)重做为 macOS 菜单栏应用。产品哲学与视觉语言继承插件版:按时停下来、加时有代价、奖励"停下来"。旧插件代码位于本仓库同级目录 `../tomato-timer-v2`(本地私有仓库),可作功能与交互的参考基准。
 
 参见:[BRIEF.md](../../BRIEF.md)
 

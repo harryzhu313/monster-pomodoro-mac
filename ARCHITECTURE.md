@@ -1,7 +1,7 @@
 # Tomato Monster (macOS) · ARCHITECTURE
 
 > 长期文档。配合 BRIEF.md(定位)、iterations/v1-launch/PRD.md(功能)、DESIGN.md(视觉)阅读。
-> 旧 Chrome 插件代码位于 `/Users/apple/web-projects/tomato-timer-v2`,是行为与 UI 的参考基准。
+> 旧 Chrome 插件代码位于本仓库同级目录 `../tomato-timer-v2`(本地私有仓库),是行为与 UI 的参考基准。
 
 ## 1. 运行时与语言
 

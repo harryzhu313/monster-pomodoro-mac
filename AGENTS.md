@@ -27,7 +27,7 @@
 | `iterations/v1-launch/CONTENT.md` | 内容槽索引(📝 直接文案 / 🤖 生成需求 / 📦 数据源) |
 | `iterations/v{N}-{slug}/.plan/` | 各迭代的 plan + phase 实施目录 |
 
-**特殊资产**:旧 Chrome 插件仓库 `/Users/apple/web-projects/tomato-timer-v2` 是**行为与 UI 的参考基准**——本项目 v1 的本质是把它迁移为菜单栏 app,功能对齐为先。
+**特殊资产**:旧 Chrome 插件仓库 `tomato-timer-v2`(位于本仓库同级目录 `../tomato-timer-v2`,本地私有、未随本项目公开)是**行为与 UI 的参考基准**——本项目 v1 的本质是把它迁移为菜单栏 app,功能对齐为先。若该目录不存在,以本仓库 spec 文档为准。
 
 ## 项目本质边界(来自 BRIEF)
 

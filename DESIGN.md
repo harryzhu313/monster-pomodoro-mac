@@ -222,4 +222,4 @@ components:
 - macOS 原生菜单栏面板(日历、电池、控制中心)—— 毛玻璃质感、发丝线、紧凑布局的基准
 
 **User-provided inspiration:**
-- 旧插件 `/Users/apple/web-projects/tomato-timer-v2` 的 popup.css / options.css —— 布局、层级与状态色的事实参考
+- 旧插件 `../tomato-timer-v2`(本地私有仓库)的 popup.css / options.css —— 布局、层级与状态色的事实参考

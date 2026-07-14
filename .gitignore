@@ -2,9 +2,22 @@
 src-tauri/target/
 *.dmg
 
+# Node / 前端构建产物
+node_modules/
+dist/
+
 # macOS
 .DS_Store
 
 # 本地数据与密钥(Notion token 只存 app data dir,不应出现在仓库)
 *.local.json
 .env
+.env.*
+!.env.example
+
+# 证书与签名私钥(Tauri updater / 代码签名)
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
