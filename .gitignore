@@ -1,0 +1,10 @@
+# Tauri / Rust
+src-tauri/target/
+*.dmg
+
+# macOS
+.DS_Store
+
+# 本地数据与密钥(Notion token 只存 app data dir,不应出现在仓库)
+*.local.json
+.env
