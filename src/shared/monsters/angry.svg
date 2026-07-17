@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 170">
+  <defs>
+    <filter id="rough-angry" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="9"/>
+      <feDisplacementMap in="SourceGraphic" scale="3.5"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#rough-angry)">
+    <!-- 左臂：紧贴身侧，拳头向下 -->
+    <path d="M 22 70 L 14 104 L 8 108 L 12 118 L 30 114 L 34 78 Z"
+          fill="#d9453a" stroke="#6e1f18" stroke-width="2" stroke-linejoin="round"/>
+    <!-- 右臂：对称 -->
+    <path d="M 118 70 L 126 104 L 132 108 L 128 118 L 110 114 L 106 78 Z"
+          fill="#d9453a" stroke="#6e1f18" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- 主体：红色毛绒方形 -->
+    <path d="M 28 62 L 40 36 L 48 60
+             L 82 60 L 90 36 L 102 62
+             L 102 128 L 88 128 L 88 158 L 78 158 L 78 128
+             L 52 128 L 52 158 L 42 158 L 42 128
+             L 28 128 Z"
+          fill="#d9453a" stroke="#6e1f18" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <!-- 毛发笔触 -->
+    <g stroke="#8a2a22" stroke-width="1.5" stroke-linecap="round" opacity="0.55" fill="none">
+      <path d="M 40 70 L 38 92"/>
+      <path d="M 55 75 L 53 102"/>
+      <path d="M 88 72 L 90 95"/>
+      <path d="M 75 115 L 77 130"/>
+      <path d="M 65 68 L 64 82"/>
+    </g>
+  </g>
+
+  <!-- 头顶怒气涂鸦线（不加 filter 保持清晰）-->
+  <g stroke="#2a2520" stroke-width="2.2" fill="none" stroke-linecap="round">
+    <path d="M 48 18 Q 54 12 60 18 Q 66 26 72 18 Q 78 10 84 18"/>
+    <path d="M 44 26 Q 52 20 60 26 Q 68 32 76 24 Q 84 18 88 24"/>
+    <path d="M 55 6 Q 62 2 68 8 Q 74 3 80 8"/>
+  </g>
+
+  <!-- V 形怒眉 -->
+  <path d="M 38 76 L 52 84" stroke="#2a2520" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M 102 76 L 88 84" stroke="#2a2520" stroke-width="4.5" stroke-linecap="round"/>
+  <!-- 怒瞪小眼 -->
+  <circle cx="55" cy="92" r="3.5" fill="#2a2520"/>
+  <circle cx="85" cy="92" r="3.5" fill="#2a2520"/>
+  <!-- 下弯大嘴（生气）-->
+  <path d="M 52 120 Q 70 106 88 120" stroke="#2a2520" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 160">
+  <defs>
+    <filter id="rough-love" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="11"/>
+      <feDisplacementMap in="SourceGraphic" scale="3"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#rough-love)">
+    <!-- 两只手托起一颗大爱心：左手从肩膀斜向中央上方 -->
+    <path d="M 20 58 Q 30 42 50 34 L 60 46 Q 42 54 32 68 Z"
+          fill="#f48aa8" stroke="#7a2a3a" stroke-width="2" stroke-linejoin="round"/>
+    <!-- 右手 -->
+    <path d="M 120 58 Q 110 42 90 34 L 80 46 Q 98 54 108 68 Z"
+          fill="#f48aa8" stroke="#7a2a3a" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- 主体：粉色毛绒方形+尖角+双腿 -->
+    <path d="M 28 64 L 40 38 L 48 62
+             L 82 62 L 90 38 L 102 64
+             L 102 124 L 88 124 L 88 152 L 78 152 L 78 124
+             L 52 124 L 52 152 L 42 152 L 42 124
+             L 28 124 Z"
+          fill="#f48aa8" stroke="#7a2a3a" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <!-- 毛发笔触 -->
+    <g stroke="#c65a78" stroke-width="1.5" stroke-linecap="round" opacity="0.55" fill="none">
+      <path d="M 38 72 L 36 92"/>
+      <path d="M 50 82 L 48 104"/>
+      <path d="M 90 75 L 92 97"/>
+      <path d="M 80 110 L 82 123"/>
+      <path d="M 55 115 L 53 125"/>
+    </g>
+  </g>
+
+  <!-- 头顶大爱心（手托着的那颗），不加粗糙滤镜以保持饱满 -->
+  <path d="M 70 22
+           C 70 10, 52 10, 52 24
+           C 52 36, 70 46, 70 46
+           C 70 46, 88 36, 88 24
+           C 88 10, 70 10, 70 24 Z"
+        fill="#ff4d6d" stroke="#7a2a3a" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- 爱心高光 -->
+  <path d="M 58 22 Q 60 17 65 18" stroke="#ffe0e8" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.9"/>
+
+  <!-- 心形眼睛（左） -->
+  <path d="M 52 84
+           C 52 78, 44 78, 44 85
+           C 44 91, 52 96, 52 96
+           C 52 96, 60 91, 60 85
+           C 60 78, 52 78, 52 85 Z"
+        fill="#d42a55" stroke="#2a2520" stroke-width="1.8" stroke-linejoin="round"/>
+  <!-- 心形眼睛（右） -->
+  <path d="M 88 84
+           C 88 78, 80 78, 80 85
+           C 80 91, 88 96, 88 96
+           C 88 96, 96 91, 96 85
+           C 96 78, 88 78, 88 85 Z"
+        fill="#d42a55" stroke="#2a2520" stroke-width="1.8" stroke-linejoin="round"/>
+
+  <!-- 甜甜的笑（上扬的嘴） -->
+  <path d="M 54 108 Q 68 120 82 108" stroke="#2a2520" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- 脸颊腮红 -->
+  <ellipse cx="40" cy="104" rx="5" ry="3" fill="#ff8aa6" opacity="0.75"/>
+  <ellipse cx="100" cy="104" rx="5" ry="3" fill="#ff8aa6" opacity="0.75"/>
+</svg>

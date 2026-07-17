@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 160">
+  <defs>
+    <filter id="rough-afraid" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="11"/>
+      <feDisplacementMap in="SourceGraphic" scale="3.5"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#rough-afraid)">
+    <!-- 主体：深灰毛绒，比其他 monster 稍窄一点（瘦弱感）-->
+    <path d="M 32 52 L 42 26 L 50 50
+             L 80 50 L 88 26 L 98 52
+             L 98 118 L 86 118 L 86 148 L 78 148 L 78 118
+             L 52 118 L 52 148 L 44 148 L 44 118
+             L 32 118 Z"
+          fill="#4a4a55" stroke="#15151d" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <!-- 紧贴身体的左手 -->
+    <path d="M 30 66 L 22 96 L 26 102 L 34 78 Z"
+          fill="#4a4a55" stroke="#15151d" stroke-width="2" stroke-linejoin="round"/>
+    <!-- 紧贴身体的右手 -->
+    <path d="M 100 66 L 108 96 L 104 102 L 96 78 Z"
+          fill="#4a4a55" stroke="#15151d" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- 毛发笔触（密集，紧张感）-->
+    <g stroke="#2a2a35" stroke-width="1.5" stroke-linecap="round" opacity="0.7" fill="none">
+      <path d="M 40 60 L 38 85"/>
+      <path d="M 55 68 L 53 95"/>
+      <path d="M 90 62 L 92 88"/>
+      <path d="M 82 100 L 84 118"/>
+      <path d="M 65 72 L 63 98"/>
+      <path d="M 48 130 L 47 145"/>
+      <path d="M 82 130 L 83 145"/>
+    </g>
+  </g>
+
+  <!-- 大瞪眼（白眼球+小瞳孔，经典惊吓表情）-->
+  <circle cx="56" cy="82" r="10" fill="#ffffff" stroke="#15151d" stroke-width="1.8"/>
+  <circle cx="84" cy="82" r="10" fill="#ffffff" stroke="#15151d" stroke-width="1.8"/>
+  <circle cx="56" cy="83" r="3" fill="#15151d"/>
+  <circle cx="84" cy="83" r="3" fill="#15151d"/>
+
+  <!-- O 形惊恐嘴 -->
+  <ellipse cx="70" cy="108" rx="5.5" ry="7.5" fill="#15151d"/>
+
+  <!-- 汗滴 -->
+  <path d="M 102 30 Q 104 38 107 42 Q 111 38 108 30 Q 105 22 102 30 Z"
+        fill="#9ed3ea" stroke="#2a4a6a" stroke-width="1.5"/>
+
+  <!-- 发抖的动作线 -->
+  <g stroke="#15151d" stroke-width="1.8" fill="none" stroke-linecap="round">
+    <path d="M 8 74 Q 12 76 8 78"/>
+    <path d="M 6 85 Q 10 87 6 89"/>
+    <path d="M 132 74 Q 128 76 132 78"/>
+    <path d="M 134 85 Q 130 87 134 89"/>
+  </g>
+</svg>

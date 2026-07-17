@@ -89,7 +89,8 @@ impl Default for Settings {
             long_break_enabled: true,
             long_break_every: 4,
             long_break_minutes: 20,
-            theme: "default".into(),
+            // 与旧版默认(default,隐藏小怪兽)不同:用户 2026-07-17 拍板默认展示小怪兽
+            theme: "monster".into(),
             extra: Map::new(),
         }
     }
@@ -137,6 +138,9 @@ pub struct Task {
     pub done: bool,
     pub is_current: bool,
     pub category: Option<String>,
+    /// 手动勾选/取消完成的覆盖标记(旧 popup.js toggleTaskDone 行为,历史明细展示用)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_override: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

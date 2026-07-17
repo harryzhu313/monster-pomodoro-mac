@@ -32,8 +32,8 @@
 |----|--------------------|------------------------------------------------------------------|-------------|
 | 01 | scaffold-spikes    | Tauri 骨架跑起来 + 4 项技术风险 spike 得出 go/no-go               | completed   |
 | 02 | timer-core         | Rust 状态机 + 持久化，行为对齐旧 service-worker，TEST 全周期跑通  | completed   |
-| 03 | main-panel         | 主面板 UI（计时 / 任务 / 收获 / 配额），日常操作闭环              | in progress |
-| 04 | break-intervention | 到点干预：chime + 白噪音 + 通知 + 托盘变红 + 加时扣配额           | not started |
+| 03 | main-panel         | 主面板 UI（计时 / 任务 / 收获 / 配额），日常操作闭环              | completed   |
+| 04 | break-intervention | 到点干预：chime + 白噪音 + 通知 + 托盘变红 + 加时扣配额           | in progress |
 | 05 | stats-settings     | 统计与设置窗口（连击 / 热力图 / 7 天 / 历史 + 全部设置项）        | not started |
 | 06 | data-channels      | 旧备份导入（校验 + 回滚）+ 导出 + Notion 导出                     | not started |
 | 07 | system-polish      | 全局快捷键、自启、首启引导、庆祝弹层、性能验收、build .dmg        | not started |

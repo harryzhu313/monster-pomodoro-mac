@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 160">
+  <defs>
+    <filter id="rough-calm" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="7"/>
+      <feDisplacementMap in="SourceGraphic" scale="3"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#rough-calm)">
+    <!-- 主体：绿色毛绒方形+两只尖角+两条腿 -->
+    <path d="M 28 52 L 40 26 L 48 50
+             L 82 50 L 90 26 L 102 52
+             L 102 118 L 88 118 L 88 148 L 78 148 L 78 118
+             L 52 118 L 52 148 L 42 148 L 42 118
+             L 28 118 Z"
+          fill="#7ab486" stroke="#2f4a37" stroke-width="2.5" stroke-linejoin="round"/>
+
+    <!-- 抱胸的左手：从左肩斜向胸前中央 -->
+    <path d="M 18 66 Q 30 80 55 100 L 72 108 L 72 116 L 52 113 Q 28 97 12 74 Z"
+          fill="#7ab486" stroke="#2f4a37" stroke-width="2" stroke-linejoin="round"/>
+    <!-- 抱胸的右手 -->
+    <path d="M 122 66 Q 110 80 85 100 L 68 108 L 68 116 L 88 113 Q 112 97 128 74 Z"
+          fill="#7ab486" stroke="#2f4a37" stroke-width="2" stroke-linejoin="round"/>
+
+    <!-- 毛发笔触 -->
+    <g stroke="#4a6b50" stroke-width="1.5" stroke-linecap="round" opacity="0.55" fill="none">
+      <path d="M 38 58 L 36 78"/>
+      <path d="M 95 60 L 97 78"/>
+      <path d="M 48 130 L 47 145"/>
+      <path d="M 82 130 L 83 145"/>
+      <path d="M 65 55 L 64 68"/>
+    </g>
+  </g>
+
+  <!-- 闭眼（弯月形）-->
+  <path d="M 45 76 Q 54 84 63 76" stroke="#2a2520" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M 74 76 Q 83 84 92 76" stroke="#2a2520" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <!-- 轻微上扬的嘴 -->
+  <path d="M 58 92 Q 68 97 78 92" stroke="#2a2520" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+</svg>

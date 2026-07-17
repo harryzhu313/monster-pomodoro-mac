@@ -434,6 +434,76 @@ pub fn handle_phase_end_if_due(data: &mut StoreData, now: i64, today: &str, dur:
     effects
 }
 
+// —— 任务管理(平移旧 popup.js:400-444;分类常量是 Notion select 依赖,不可改——红线 2)——
+
+const CATEGORIES: [&str; 4] = ["工作", "学习", "生活", "兴趣爱好"];
+
+fn normalize_category(c: Option<String>) -> String {
+    match c {
+        Some(c) if CATEGORIES.contains(&c.as_str()) => c,
+        _ => "工作".to_string(),
+    }
+}
+
+/// 旧 popup 用 String(id) 做比较,这里对齐:类型不同但字符串形式相同也算同一任务
+fn task_id_eq(a: &Value, b: &Value) -> bool {
+    a == b || a.to_string() == b.to_string()
+}
+
+pub fn add_task(
+    data: &mut StoreData,
+    today: &str,
+    now: i64,
+    title: &str,
+    category: Option<String>,
+    planned: f64,
+) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    roll_over_tasks_if_needed(data, today);
+    let planned = if planned.is_finite() { planned.floor() as i64 } else { 1 }.clamp(1, 20) as u32;
+    let category = normalize_category(category);
+    // 没有活跃的当前任务时,新任务自动成为当前(旧 addTask 的 isCurrent 规则)
+    let is_current = data.tasks_today.tasks.iter().all(|t| !t.is_current || t.done);
+    let id = format!("t_{:x}_{:04x}", now, (now as u64).wrapping_mul(2_654_435_761) & 0xffff);
+    data.tasks_today.tasks.push(Task {
+        id: Value::String(id),
+        title: title.to_string(),
+        planned,
+        is_current,
+        category: Some(category.clone()),
+        ..Task::default()
+    });
+    data.last_category = Some(category);
+}
+
+pub fn set_task_done(data: &mut StoreData, today: &str, id: &Value, done: bool) {
+    roll_over_tasks_if_needed(data, today);
+    for t in &mut data.tasks_today.tasks {
+        if task_id_eq(&t.id, id) {
+            t.done = done;
+            t.done_override = Some(done); // 历史明细的圆圈状态与勾选一致(旧 toggleTaskDone)
+            if done {
+                t.is_current = false;
+            }
+        }
+    }
+}
+
+pub fn set_current_task(data: &mut StoreData, today: &str, id: &Value) {
+    roll_over_tasks_if_needed(data, today);
+    for t in &mut data.tasks_today.tasks {
+        t.is_current = task_id_eq(&t.id, id) && !t.done;
+    }
+}
+
+pub fn delete_task(data: &mut StoreData, today: &str, id: &Value) {
+    roll_over_tasks_if_needed(data, today);
+    data.tasks_today.tasks.retain(|t| !task_id_eq(&t.id, id));
+}
+
 // —— settings 更新(patch 合并 + 数值 clamp)——
 
 pub fn update_settings(data: &mut StoreData, patch: Value) {
@@ -463,6 +533,28 @@ pub fn update_settings(data: &mut StoreData, patch: Value) {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DayStat {
+    pub date: String,
+    pub completed: u32,
+    pub rotten: u32,
+}
+
+/// 从 6 天前到今天共 7 项(等价旧 GET_STATS / getLast7DaysStats)
+fn last_7_days(data: &StoreData, today: &str) -> Vec<DayStat> {
+    let Some(t) = parse_date(today) else { return vec![] };
+    (0..7)
+        .rev()
+        .filter_map(|i| t.checked_sub_days(chrono::Days::new(i)))
+        .map(|d| {
+            let date = d.format("%Y-%m-%d").to_string();
+            let e = data.stats.get(&date).copied().unwrap_or_default();
+            DayStat { date, completed: e.completed, rotten: e.rotten }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub timer: TimerState,
     pub quota: QuotaView,
@@ -472,6 +564,8 @@ pub struct Snapshot {
     pub today_stats: crate::store::StatEntry,
     pub badges: BadgesView,
     pub tasks_today: crate::store::TasksToday,
+    pub last_7_days: Vec<DayStat>,
+    pub last_category: Option<String>,
     pub now: i64,
 }
 
@@ -485,6 +579,8 @@ pub fn snapshot(data: &StoreData, now: i64, today: &str, dur: &Durations) -> Sna
         today_stats: data.stats.get(today).copied().unwrap_or_default(),
         badges: get_badges_view(data, today),
         tasks_today: data.tasks_today.clone(),
+        last_7_days: last_7_days(data, today),
+        last_category: data.last_category.clone(),
         now,
     }
 }
@@ -711,6 +807,44 @@ mod tests {
         assert_eq!(d.tasks_today.date, T);
         assert!(d.tasks_today.tasks.is_empty());
         assert_eq!(d.tasks_archive["2026-07-16"].len(), 1);
+    }
+
+    #[test]
+    fn add_task_rules() {
+        let mut d = StoreData::default();
+        d.tasks_today.date = T.into();
+        add_task(&mut d, T, 1000, "  ", None, 3.0); // 空标题拒绝
+        assert!(d.tasks_today.tasks.is_empty());
+        add_task(&mut d, T, 1000, "写周报", Some("学习".into()), 99.0);
+        let t0 = &d.tasks_today.tasks[0];
+        assert_eq!(t0.planned, 20); // clamp 1..20
+        assert!(t0.is_current); // 首个任务自动成为当前
+        assert_eq!(d.last_category.as_deref(), Some("学习"));
+        add_task(&mut d, T, 2000, "读书", Some("不存在的分类".into()), f64::NAN);
+        let t1 = &d.tasks_today.tasks[1];
+        assert_eq!(t1.category.as_deref(), Some("工作")); // 非法分类回默认
+        assert_eq!(t1.planned, 1); // NaN → 1
+        assert!(!t1.is_current); // 已有当前任务,不抢
+    }
+
+    #[test]
+    fn task_done_and_current() {
+        let mut d = StoreData::default();
+        d.tasks_today.date = T.into();
+        add_task(&mut d, T, 1000, "A", None, 1.0);
+        add_task(&mut d, T, 2000, "B", None, 1.0);
+        let id_a = d.tasks_today.tasks[0].id.clone();
+        let id_b = d.tasks_today.tasks[1].id.clone();
+        set_task_done(&mut d, T, &id_a, true);
+        assert!(d.tasks_today.tasks[0].done);
+        assert_eq!(d.tasks_today.tasks[0].done_override, Some(true));
+        assert!(!d.tasks_today.tasks[0].is_current); // 完成即让出当前
+        set_current_task(&mut d, T, &id_b);
+        assert!(d.tasks_today.tasks[1].is_current);
+        set_current_task(&mut d, T, &id_a); // 已完成任务不能设为当前
+        assert!(!d.tasks_today.tasks[0].is_current);
+        delete_task(&mut d, T, &id_b);
+        assert_eq!(d.tasks_today.tasks.len(), 1);
     }
 
     #[test]

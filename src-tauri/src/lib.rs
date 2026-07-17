@@ -134,6 +134,30 @@ fn reset_quota(app: AppHandle) {
     with_store(&app, |d, _, today, _| timer::reset_quota(d, today));
 }
 
+// —— 任务(前端只发指令,数据变更与持久化全在 Rust)——
+
+#[tauri::command]
+fn add_task(app: AppHandle, title: String, category: Option<String>, planned: f64) {
+    with_store(&app, |d, now, today, _| {
+        timer::add_task(d, today, now, &title, category, planned)
+    });
+}
+
+#[tauri::command]
+fn set_task_done(app: AppHandle, id: serde_json::Value, done: bool) {
+    with_store(&app, |d, _, today, _| timer::set_task_done(d, today, &id, done));
+}
+
+#[tauri::command]
+fn set_current_task(app: AppHandle, id: serde_json::Value) {
+    with_store(&app, |d, _, today, _| timer::set_current_task(d, today, &id));
+}
+
+#[tauri::command]
+fn delete_task(app: AppHandle, id: serde_json::Value) {
+    with_store(&app, |d, _, today, _| timer::delete_task(d, today, &id));
+}
+
 // —— 窗口/托盘 ——
 
 fn toggle_panel(app: &AppHandle) {
@@ -259,6 +283,10 @@ pub fn run() {
             overtime,
             update_settings,
             reset_quota,
+            add_task,
+            set_task_done,
+            set_current_task,
+            delete_task,
             audio::play_test_noise,
             audio::play_test_chime
         ])
