@@ -36,6 +36,11 @@
      0.88 对齐原生菜单的近实色质感(用户以 CodexBar 菜单为基准拍板) */
   --window-wash: rgba(246, 245, 240, 0.88);
 
+  /* 庆祝弹层专属色板(love monster,深浅模式同款——节日场景不随主题变) */
+  --celebration-inner: rgba(255, 182, 202, 0.96);
+  --celebration-outer: rgba(212, 42, 85, 0.92);
+  --celebration-shadow: rgba(122, 42, 58, 0.45);
+
   /* 热力图四级色阶(success 绿系,0 级用表面色) */
   --heat-0: rgba(0, 0, 0, 0.06);
   --heat-1: rgba(74, 138, 92, 0.35);

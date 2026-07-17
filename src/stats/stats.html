@@ -190,13 +190,14 @@
       </div>
       <div class="row">
         <label for="launch-at-login">开机自动启动</label>
-        <input type="checkbox" id="launch-at-login" disabled title="自启功能即将接入(phase 07)" />
+        <input type="checkbox" id="launch-at-login" />
       </div>
       <div class="row">
         <label for="shortcut-input">全局快捷键</label>
-        <input type="text" id="shortcut-input" class="notion-input shortcut-input" value="⌃⌥P"
-               disabled title="快捷键功能即将接入(phase 07)" />
+        <input type="text" id="shortcut-input" class="notion-input shortcut-input" readonly
+               placeholder="点击后按组合键" title="点击后按下新组合键;按 Delete 关闭快捷键" />
       </div>
+      <p class="hint" id="shortcut-status">点击输入框后按下组合键即可修改;按 Delete 关闭快捷键。</p>
     </section>
   </div>
   <script type="module" src="stats.js"></script>

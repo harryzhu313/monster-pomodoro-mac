@@ -71,6 +71,9 @@ const els = {
   taskPlannedInput: document.getElementById('task-planned'),
   taskList: document.getElementById('task-list'),
   taskEmpty: document.getElementById('task-empty'),
+  onboarding: document.getElementById('onboarding'),
+  obNote: document.getElementById('ob-note'),
+  obFile: document.getElementById('ob-file'),
 };
 
 let snap = null;
@@ -310,11 +313,43 @@ function render(next) {
   renderTimer();
   renderHarvest();
   renderTasks();
+  els.onboarding.classList.toggle('is-hidden', snap.onboardingDone !== false);
   if (!categoryInitialized && snap.lastCategory) {
     els.taskCategorySelect.value = normalizeCategory(snap.lastCategory);
     categoryInitialized = true;
   }
 }
+
+// —— 首次启动引导(三步:导入 → 自启 → 快捷键) ——
+
+function showObStep(n) {
+  for (const i of [1, 2, 3]) {
+    document.getElementById(`ob-step-${i}`).classList.toggle('is-hidden', i !== n);
+  }
+}
+
+document.getElementById('ob-import').addEventListener('click', () => els.obFile.click());
+
+els.obFile.addEventListener('change', async () => {
+  const file = els.obFile.files?.[0];
+  els.obFile.value = '';
+  if (!file) return;
+  const r = await invoke('import_backup', { json: await file.text() });
+  if (r?.ok) {
+    els.obNote.textContent = `导入完成,${r.days} 天的历史已接上,连击和热力图都在。`;
+    setTimeout(() => showObStep(2), 900);
+  } else {
+    els.obNote.textContent = `导入失败,现有数据没有被改动。原因:${r?.error || '未知'}。`;
+  }
+});
+
+document.getElementById('ob-fresh').addEventListener('click', () => showObStep(2));
+document.getElementById('ob-autostart-yes').addEventListener('click', async () => {
+  await invoke('set_autostart', { enabled: true });
+  showObStep(3);
+});
+document.getElementById('ob-autostart-no').addEventListener('click', () => showObStep(3));
+document.getElementById('ob-done').addEventListener('click', () => invoke('finish_onboarding'));
 
 // —— 事件绑定 ——
 

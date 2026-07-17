@@ -59,6 +59,9 @@ const els = {
   notionDayDb: document.getElementById('notion-day-db'),
   notionStatus: document.getElementById('notion-status'),
   btnNotionTest: document.getElementById('btn-notion-test'),
+  launchAtLogin: document.getElementById('launch-at-login'),
+  shortcutInput: document.getElementById('shortcut-input'),
+  shortcutStatus: document.getElementById('shortcut-status'),
 };
 
 const HISTORY_MAX_DAYS = 30;
@@ -83,6 +86,7 @@ function renderSettings(s) {
   els.longBreakMinutes.disabled = !s.longBreakEnabled;
   els.themeSelect.value = s.theme;
   els.autoStart.checked = !!s.autoStartNextFocus;
+  renderShortcut();
 }
 
 function patch(patchObj) {
@@ -105,6 +109,75 @@ els.longBreakMinutes.addEventListener('change', () =>
 );
 els.themeSelect.addEventListener('change', () => patch({ theme: els.themeSelect.value }));
 els.autoStart.addEventListener('change', () => patch({ autoStartNextFocus: els.autoStart.checked }));
+
+// —— 开机自启(真相源是系统 LaunchAgent,经命令读写)——
+
+async function loadAutostart() {
+  const on = await invoke('get_autostart');
+  if (typeof on === 'boolean') els.launchAtLogin.checked = on;
+}
+
+els.launchAtLogin.addEventListener('change', async () => {
+  const r = await invoke('set_autostart', { enabled: els.launchAtLogin.checked });
+  if (r && !r.ok) {
+    els.launchAtLogin.checked = !els.launchAtLogin.checked; // 失败回滚
+    els.shortcutStatus.textContent = `自启设置失败:${r.error}`;
+  }
+});
+
+// —— 全局快捷键:点击输入框后按组合键捕获;Delete 关闭 ——
+
+/** accelerator → mac 风格展示(Ctrl+Alt+P → ⌃⌥P) */
+function prettyAccel(accel) {
+  if (!accel) return '';
+  return accel
+    .replace(/Ctrl\+?/g, '⌃').replace(/Alt\+?/g, '⌥')
+    .replace(/Shift\+?/g, '⇧').replace(/Super\+?|Cmd\+?/g, '⌘');
+}
+
+function renderShortcut() {
+  if (document.activeElement !== els.shortcutInput) {
+    const accel = snap?.settings?.globalShortcut ?? '';
+    els.shortcutInput.value = accel ? prettyAccel(accel) : '(已关闭)';
+  }
+}
+
+els.shortcutInput.addEventListener('focus', () => {
+  els.shortcutInput.value = '';
+  els.shortcutInput.placeholder = '按下组合键…';
+});
+
+els.shortcutInput.addEventListener('blur', renderShortcut);
+
+els.shortcutInput.addEventListener('keydown', async (e) => {
+  e.preventDefault();
+  if (e.key === 'Escape') {
+    els.shortcutInput.blur();
+    return;
+  }
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    const r = await invoke('set_global_shortcut', { accel: '' });
+    if (r?.ok) els.shortcutStatus.textContent = '全局快捷键已关闭。';
+    els.shortcutInput.blur();
+    return;
+  }
+  // 组合键:至少一个修饰键 + 一个普通键
+  const mods = [];
+  if (e.ctrlKey) mods.push('Ctrl');
+  if (e.altKey) mods.push('Alt');
+  if (e.shiftKey) mods.push('Shift');
+  if (e.metaKey) mods.push('Super');
+  const key = e.code.replace(/^(Key|Digit)/, '');
+  if (!mods.length || ['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return;
+  const accel = [...mods, key].join('+');
+  const r = await invoke('set_global_shortcut', { accel });
+  if (r?.ok) {
+    els.shortcutStatus.textContent = `已设为 ${prettyAccel(accel)}。`;
+  } else {
+    els.shortcutStatus.textContent = `注册失败(可能与其他软件冲突):${r?.error || '未知'}。已保留原快捷键。`;
+  }
+  els.shortcutInput.blur();
+});
 
 // —— 7 天柱状图 + 连续/累计(平移旧 renderChart/computeStreaks)——
 
@@ -622,3 +695,4 @@ if (tauri) {
 setHistoryCollapsed(localStorage.getItem(HISTORY_COLLAPSED_KEY) === '1');
 refreshAll();
 loadNotionConfig();
+loadAutostart();

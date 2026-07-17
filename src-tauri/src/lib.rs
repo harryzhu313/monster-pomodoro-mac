@@ -29,6 +29,11 @@ struct AppState {
     last_minute_fired: Mutex<Option<i64>>,
     /// 休息期面板钉住:失焦不隐藏、托盘点击不收起(blur 回调里免锁读取)
     panel_pinned: AtomicBool,
+    /// 托盘图标当前状态类别(只在变化时 set_icon,避免每秒重设)
+    last_tray_phase: Mutex<Option<store::TimerPhase>>,
+    /// 面板/统计窗口可见性(tick 只在有人看时广播快照——CPU 预算 §9)
+    panel_visible: AtomicBool,
+    stats_open: AtomicBool,
 }
 
 fn now_ms() -> i64 {
@@ -66,21 +71,50 @@ fn run_effects(app: &AppHandle, settings: &store::Settings, effects: &[Effect]) 
             }
             Effect::PanelUnpin => {
                 state.panel_pinned.store(false, Ordering::SeqCst);
+                state.panel_visible.store(false, Ordering::SeqCst);
                 if let Some(panel) = app.get_webview_window("panel") {
                     let _ = panel.hide();
                 }
             }
-            // phase 07 接 love monster 全屏窗口
-            Effect::Celebration => {}
+            Effect::Celebration => open_celebration(app),
         }
     }
 }
 
-fn set_tray_title(app: &AppHandle, title: Option<String>) {
+/// 托盘三态模板剪影(CONTENT.md 菜单栏节:idle=happy / 专注=calm / 休息=angry)
+fn tray_icon_bytes(phase: store::TimerPhase) -> &'static [u8] {
+    match phase {
+        store::TimerPhase::Idle => include_bytes!("../icons/tray-idle.png"),
+        // 暂停归专注语境,用 calm
+        store::TimerPhase::Focusing | store::TimerPhase::Paused => {
+            include_bytes!("../icons/tray-focus.png")
+        }
+        store::TimerPhase::Breaking => include_bytes!("../icons/tray-break.png"),
+    }
+}
+
+fn set_tray_title(app: &AppHandle, title: Option<String>, phase: store::TimerPhase) {
     let app2 = app.clone();
+    let state = app.state::<AppState>();
+    // 图标只在状态类别变化时更换,标题每秒都刷
+    let icon_changed = {
+        let mut last = state.last_tray_phase.lock().expect("lock poisoned");
+        if *last != Some(phase) {
+            *last = Some(phase);
+            true
+        } else {
+            false
+        }
+    };
     let _ = app.run_on_main_thread(move || {
         if let Some(tray) = app2.tray_by_id("main") {
             let _ = tray.set_title(title.as_deref());
+            if icon_changed {
+                if let Ok(img) = Image::from_bytes(tray_icon_bytes(phase)) {
+                    let _ = tray.set_icon(Some(img));
+                    let _ = tray.set_icon_as_template(true);
+                }
+            }
         }
     });
 }
@@ -94,7 +128,11 @@ fn sync_out(app: &AppHandle, store: &Store, dur: &Durations) {
     let today = timer::today_str();
     let snap = timer::snapshot(&store.data, now, &today, dur);
     let _ = app.emit("state-update", &snap);
-    set_tray_title(app, timer::tray_title(&store.data.timer_state, now));
+    set_tray_title(
+        app,
+        timer::tray_title(&store.data.timer_state, now),
+        store.data.timer_state.state,
+    );
 }
 
 /// 锁 store → 执行变更 → 收尾。所有 command 走这一条路
@@ -164,6 +202,7 @@ async fn overtime(app: AppHandle, ms: f64) -> timer::OvertimeOutcome {
         // 加时成功 = 选择继续工作:解除钉住、收起面板、停白噪音
         let state = app.state::<AppState>();
         state.panel_pinned.store(false, Ordering::SeqCst);
+        state.panel_visible.store(false, Ordering::SeqCst);
         state.audio.send(AudioCmd::NoiseStop);
         if let Some(panel) = app.get_webview_window("panel") {
             let _ = panel.hide();
@@ -302,6 +341,113 @@ async fn log_notion_export(app: AppHandle, date: String, summary: serde_json::Va
     });
 }
 
+// —— 全局快捷键 / 开机自启 / 首启引导 / 庆祝弹层 ——
+
+/// 快捷键动作:开始/暂停/继续;休息中无操作(红线 1:快捷键不提供跳过出口)
+fn shortcut_toggle(app: &AppHandle) {
+    with_store(app, |d, now, _, dur| match d.timer_state.state {
+        store::TimerPhase::Idle => timer::start_focus(d, now, dur),
+        store::TimerPhase::Focusing => timer::pause(d, now),
+        store::TimerPhase::Paused => timer::resume(d, now),
+        store::TimerPhase::Breaking => {}
+    });
+}
+
+/// 注册全局快捷键;accel 空串 = 关闭。冲突等注册失败返回 Err 供 UI 降级提示
+fn apply_global_shortcut(app: &AppHandle, accel: &str) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    if accel.is_empty() {
+        return Ok(());
+    }
+    gs.register(accel).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutOutcome {
+    ok: bool,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn set_global_shortcut(app: AppHandle, accel: String) -> ShortcutOutcome {
+    match apply_global_shortcut(&app, &accel) {
+        Ok(()) => {
+            with_store(&app, |d, _, _, _| d.settings.global_shortcut = accel);
+            ShortcutOutcome { ok: true, error: None }
+        }
+        Err(e) => {
+            // 注册失败:回滚到原有快捷键,不写入设置
+            let prev = {
+                let state = app.state::<AppState>();
+                let guard = state.store.lock().expect("store lock poisoned");
+                guard.data.settings.global_shortcut.clone()
+            };
+            let _ = apply_global_shortcut(&app, &prev);
+            ShortcutOutcome { ok: false, error: Some(e) }
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+async fn set_autostart(app: AppHandle, enabled: bool) -> ShortcutOutcome {
+    use tauri_plugin_autostart::ManagerExt;
+    let r = if enabled { app.autolaunch().enable() } else { app.autolaunch().disable() };
+    match r {
+        Ok(()) => ShortcutOutcome { ok: true, error: None },
+        Err(e) => ShortcutOutcome { ok: false, error: Some(e.to_string()) },
+    }
+}
+
+#[tauri::command]
+async fn finish_onboarding(app: AppHandle) {
+    with_store(&app, |d, _, _, _| d.onboarding_done = true);
+}
+
+/// love monster 全屏庆祝窗口(临时窗口,展示完销毁——ARCHITECTURE §3)
+fn open_celebration(app: &AppHandle) {
+    if app.get_webview_window("celebration").is_some() {
+        return;
+    }
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        "celebration",
+        tauri::WebviewUrl::App("celebration/celebration.html".into()),
+    )
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible_on_all_workspaces(true)
+    .focused(true);
+    if let Ok(Some(mon)) = app.primary_monitor() {
+        let scale = mon.scale_factor();
+        let size = mon.size();
+        let pos = mon.position();
+        builder = builder
+            .inner_size(size.width as f64 / scale, size.height as f64 / scale)
+            .position(pos.x as f64 / scale, pos.y as f64 / scale);
+    }
+    if let Err(e) = builder.build() {
+        eprintln!("celebration 窗口创建失败: {e}");
+    }
+}
+
+#[tauri::command]
+async fn close_celebration(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("celebration") {
+        let _ = w.destroy();
+    }
+}
+
 // —— 统计与设置窗口 ——
 
 #[tauri::command]
@@ -323,6 +469,7 @@ async fn open_stats(app: AppHandle) {
     .build()
     {
         Ok(w) => {
+            app.state::<AppState>().stats_open.store(true, Ordering::SeqCst);
             // Sidebar 材质磨砂感强;UnderWindowBackground 太透,壁纸会穿透(用户反馈)
             #[cfg(target_os = "macos")]
             if let Err(e) = window_vibrancy::apply_vibrancy(
@@ -372,7 +519,19 @@ fn show_panel(app: &AppHandle, focus: bool) {
         if focus {
             let _ = panel.set_focus();
         }
+        app.state::<AppState>().panel_visible.store(true, Ordering::SeqCst);
+        emit_fresh_snapshot(app); // 隐藏期间不广播,显示瞬间补一拍最新状态
     }
+}
+
+/// 只广播不落盘:窗口从隐藏转可见时刷新其显示
+fn emit_fresh_snapshot(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let guard = state.store.lock().expect("store lock poisoned");
+    let now = now_ms();
+    let today = timer::today_str();
+    let snap = timer::snapshot(&guard.data, now, &today, &state.durations);
+    let _ = app.emit("state-update", &snap);
 }
 
 fn toggle_panel(app: &AppHandle) {
@@ -382,6 +541,7 @@ fn toggle_panel(app: &AppHandle) {
             // 钉住期间(休息中)点托盘不收起——无免费跳过的一部分
             if !pinned {
                 let _ = panel.hide();
+                app.state::<AppState>().panel_visible.store(false, Ordering::SeqCst);
             }
         } else {
             show_panel(app, true);
@@ -399,6 +559,20 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    // 只注册一个快捷键,按下即触发开始/暂停(休息中无操作)
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        shortcut_toggle(app);
+                    }
+                })
+                .build(),
+        )
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -415,10 +589,29 @@ pub fn run() {
             )
             .expect("apply_vibrancy 失败");
 
+            // 托盘右键菜单:统计与设置 / 退出(左键仍是 toggle 面板)。
+            // 退出不构成休息跳过:状态持久化,重开即恢复(红线审计已复核)
+            let menu = {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                let stats_item = MenuItemBuilder::with_id("stats", "统计与设置").build(app)?;
+                let quit_item =
+                    MenuItemBuilder::with_id("quit", "退出 Tomato Monster").build(app)?;
+                MenuBuilder::new(app).item(&stats_item).separator().item(&quit_item).build()?
+            };
+
             TrayIconBuilder::with_id("main")
                 .icon(Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?)
                 .icon_as_template(true)
                 .tooltip("Tomato Monster · 按时停下来")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "stats" => {
+                        tauri::async_runtime::spawn(open_stats(app.clone()));
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
                 .on_tray_icon_event(|tray, event| {
                     tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
                     if let TrayIconEvent::Click {
@@ -442,12 +635,17 @@ pub fn run() {
             // 重启恢复到休息中:白噪音接着放、面板重新钉住(状态驱动)
             let resume_break = store.data.timer_state.state == store::TimerPhase::Breaking;
             let resume_noise = resume_break && store.data.settings.white_noise_enabled;
+            let shortcut = store.data.settings.global_shortcut.clone();
+            let needs_onboarding = !store.data.onboarding_done;
             app.manage(AppState {
                 store: Mutex::new(store),
                 durations,
                 audio: AudioEngine::new(),
                 last_minute_fired: Mutex::new(None),
                 panel_pinned: AtomicBool::new(false),
+                last_tray_phase: Mutex::new(None),
+                panel_visible: AtomicBool::new(false),
+                stats_open: AtomicBool::new(false),
             });
             let state = app.state::<AppState>();
             if resume_noise {
@@ -456,6 +654,16 @@ pub fn run() {
             if resume_break {
                 state.panel_pinned.store(true, Ordering::SeqCst);
                 show_panel(app.handle(), false);
+            }
+
+            // 全局快捷键:启动时按设置注册;冲突不阻塞启动,设置页可改
+            if let Err(e) = apply_global_shortcut(app.handle(), &shortcut) {
+                eprintln!("全局快捷键 {shortcut} 注册失败(可能冲突): {e}");
+            }
+
+            // 首次启动:自动弹出面板进入引导流(欢迎/导入 → 自启 → 快捷键)
+            if needs_onboarding {
+                show_panel(app.handle(), true);
             }
 
             // 开发自测钩子:TOMATO_AUTOSTART=1 启动即开始一个专注,
@@ -470,7 +678,7 @@ pub fn run() {
 
             // 开发自测钩子:启动即开统计窗口(验证窗口创建/vibrancy,仅测试用)
             if std::env::var("TOMATO_OPEN_STATS").map(|v| v == "1").unwrap_or(false) {
-                open_stats(app.handle().clone());
+                tauri::async_runtime::spawn(open_stats(app.handle().clone()));
             }
 
             // tick 线程:每秒驱动到点结算 + 托盘标题 + 快照广播(endTime 制,tick 只是采样)
@@ -498,12 +706,18 @@ pub fn run() {
                             run_effects(&handle, &guard.data.settings.clone(), &effects);
                             sync_out(&handle, &guard, &state.durations);
                         } else if active || was_active {
-                            // 倒计时进行中每秒刷新;从 active → idle 的那一拍也要刷一次
-                            let snap = timer::snapshot(&guard.data, now, &today, &state.durations);
-                            let _ = handle.emit("state-update", &snap);
+                            // 托盘标题每秒都刷;快照只在有窗口在看时广播(CPU 预算 §9)
+                            let watching = state.panel_visible.load(Ordering::SeqCst)
+                                || state.stats_open.load(Ordering::SeqCst);
+                            if watching || !active {
+                                let snap =
+                                    timer::snapshot(&guard.data, now, &today, &state.durations);
+                                let _ = handle.emit("state-update", &snap);
+                            }
                             set_tray_title(
                                 &handle,
                                 timer::tray_title(&guard.data.timer_state, now),
+                                guard.data.timer_state.state,
                             );
                         }
                         was_active = active;
@@ -525,7 +739,21 @@ pub fn run() {
                         .load(Ordering::SeqCst);
                     if !pinned {
                         let _ = window.hide();
+                        window
+                            .app_handle()
+                            .state::<AppState>()
+                            .panel_visible
+                            .store(false, Ordering::SeqCst);
                     }
+                }
+            }
+            if window.label() == "stats" {
+                if let WindowEvent::Destroyed = event {
+                    window
+                        .app_handle()
+                        .state::<AppState>()
+                        .stats_open
+                        .store(false, Ordering::SeqCst);
                 }
             }
         })
@@ -551,7 +779,12 @@ pub fn run() {
             import_backup,
             get_notion_config,
             set_notion_config,
-            log_notion_export
+            log_notion_export,
+            set_global_shortcut,
+            get_autostart,
+            set_autostart,
+            finish_onboarding,
+            close_celebration
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

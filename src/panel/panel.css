@@ -543,6 +543,56 @@ body.theme-monster .monster[src] {
   padding-bottom: var(--space-xs);
 }
 
+/* —— 首次启动引导:盖住整个面板的向导层 —— */
+
+.container {
+  position: relative;
+}
+
+.onboarding {
+  position: absolute;
+  inset: 0;
+  background: var(--window-wash);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-lg);
+  gap: var(--space-md);
+  z-index: 10;
+}
+
+.ob-monster {
+  width: 64px;
+  height: 73px;
+}
+
+.ob-step h2 {
+  font: var(--text-h1);
+  line-height: 1.5;
+  margin-bottom: var(--space-sm);
+}
+
+.ob-step p {
+  font: var(--text-caption);
+  color: var(--on-neutral-muted);
+  margin-bottom: var(--space-md);
+}
+
+.ob-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.ob-note {
+  font: var(--text-caption);
+  color: var(--warning);
+  margin-top: var(--space-sm);
+  min-height: 15px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

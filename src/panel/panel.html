@@ -73,6 +73,35 @@
       <button id="btn-stats" class="btn-ghost">统计与设置</button>
     </div>
     <div class="hint" id="hint">按时停下来,比多做一轮重要。</div>
+
+    <!-- 首次启动引导(CONTENT.md"首次启动引导"节文案,通知权限步骤已按决策移除) -->
+    <div class="onboarding is-hidden" id="onboarding">
+      <img class="ob-monster" src="../shared/monsters/happy.svg" alt="" />
+      <div class="ob-step" id="ob-step-1">
+        <h2>从 Chrome 插件搬家?<br>先把旧数据接回来。</h2>
+        <div class="ob-actions">
+          <button class="btn btn-primary" id="ob-import">导入备份文件</button>
+          <button class="btn btn-secondary" id="ob-fresh">我是新用户,直接开始</button>
+        </div>
+        <div class="ob-note" id="ob-note"></div>
+        <input type="file" id="ob-file" accept="application/json" hidden />
+      </div>
+      <div class="ob-step is-hidden" id="ob-step-2">
+        <h2>要不要开机自动启动?</h2>
+        <p>番茄钟常驻菜单栏才不会被忘记。</p>
+        <div class="ob-actions">
+          <button class="btn btn-primary" id="ob-autostart-yes">开启</button>
+          <button class="btn btn-secondary" id="ob-autostart-no">暂不</button>
+        </div>
+      </div>
+      <div class="ob-step is-hidden" id="ob-step-3">
+        <h2>随时按 ⌃⌥P 开始或暂停专注</h2>
+        <p>不用找鼠标。可在设置里修改。</p>
+        <div class="ob-actions">
+          <button class="btn btn-primary" id="ob-done">开始使用</button>
+        </div>
+      </div>
+    </div>
   </main>
   <script type="module" src="panel.js"></script>
 </body>

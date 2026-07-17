@@ -79,6 +79,8 @@ pub struct Settings {
     pub long_break_minutes: u32,
     /// 最后一分钟提示(新设置项,旧版挂在 chimeEnabled 下,PRD §5 拆为独立开关)
     pub last_minute_enabled: bool,
+    /// 全局快捷键(Tauri accelerator 格式;空串 = 关闭)
+    pub global_shortcut: String,
     pub theme: String,
     /// 未识别字段原样保留,前向兼容(如未来版本的新设置)
     #[serde(flatten)]
@@ -95,6 +97,7 @@ impl Default for Settings {
             long_break_every: 4,
             long_break_minutes: 20,
             last_minute_enabled: true,
+            global_shortcut: "Ctrl+Alt+P".into(), // ⌃⌥P(CONTENT.md 首启引导文案)
             // 与旧版默认(default,隐藏小怪兽)不同:用户 2026-07-17 拍板默认展示小怪兽
             theme: "monster".into(),
             extra: Map::new(),
@@ -194,6 +197,8 @@ pub struct StoreData {
     pub last_category: Option<String>,
     pub notion_export_log: Map<String, Value>,
     pub notion_config: NotionConfig,
+    /// 首启引导已完成(既有安装在 Store::load 时自动补 true)
+    pub onboarding_done: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -208,7 +213,11 @@ impl Store {
     pub fn load(path: PathBuf) -> Store {
         let data = match fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<StoreData>(&text) {
-                Ok(data) => data,
+                Ok(mut data) => {
+                    // 引导标记是后加字段:既有安装(文件已存在)视为不需要引导
+                    data.onboarding_done = true;
+                    data
+                }
                 Err(e) => {
                     eprintln!("store: 解析 {} 失败({e}),侧移为 .corrupt", path.display());
                     let _ = fs::rename(&path, path.with_extension("json.corrupt"));

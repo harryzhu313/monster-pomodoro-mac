@@ -464,7 +464,7 @@ pub fn handle_phase_end_if_due(data: &mut StoreData, now: i64, today: &str, dur:
 
     // 休息结束:停白噪音 → chime → 收起面板 → 自动/手动开始下一轮
     // (自动/手动模式都收起面板,用户 2026-07-17 拍板)
-    let mut effects = vec![Effect::WhiteNoiseStop, Effect::Chime, Effect::PanelUnpin];
+    let effects = vec![Effect::WhiteNoiseStop, Effect::Chime, Effect::PanelUnpin];
     ensure_anchor(data, today);
     if data.settings.auto_start_next_focus {
         start_focus(data, now, dur);
@@ -669,6 +669,7 @@ pub struct Snapshot {
     pub tasks_today: crate::store::TasksToday,
     pub last_7_days: Vec<DayStat>,
     pub last_category: Option<String>,
+    pub onboarding_done: bool,
     pub now: i64,
 }
 
@@ -684,6 +685,7 @@ pub fn snapshot(data: &StoreData, now: i64, today: &str, dur: &Durations) -> Sna
         tasks_today: data.tasks_today.clone(),
         last_7_days: last_7_days(data, today),
         last_category: data.last_category.clone(),
+        onboarding_done: data.onboarding_done,
         now,
     }
 }

@@ -36,7 +36,7 @@
 | 04 | break-intervention | 到点干预：chime + 白噪音 + 钉住面板 + 托盘变红 + 加时扣配额      | completed   |
 | 05 | stats-settings     | 统计与设置窗口（连击 / 热力图 / 7 天 / 历史 + 全部设置项）        | completed   |
 | 06 | data-channels      | 旧备份导入（校验 + 回滚）+ 导出 + Notion 导出                     | completed   |
-| 07 | system-polish      | 全局快捷键、自启、首启引导、庆祝弹层、性能验收、build .dmg        | in progress |
+| 07 | system-polish      | 全局快捷键、自启、首启引导、庆祝弹层、性能验收、build .dmg        | completed   |
 
 > 状态值：`not started` / `in progress` / `completed` / `blocked` / `skipped`
 >
@@ -55,8 +55,15 @@
 - [x] 托盘每秒刷新功耗是否超预算（CPU < 0.5%）— phase 01 实测 ~0.1%，保留秒级刷新
 - [x] rodio 合成白噪音音色能否接受 — phase 01 对齐旧版棕噪音算法后用户验收通过（详见 phase 01 Notes）
 - [x] window-vibrancy 与 Tauri 2.x 当前版本兼容性 — phase 01 验证通过（tauri 2.11.5 + vibrancy 0.6）
-- [ ] 默认快捷键 ⌃⌥P 是否与常用软件冲突 — 预期在 phase 07 解决（可自定义兜底）
+- [x] 默认快捷键 ⌃⌥P 是否与常用软件冲突 — phase 07 用户实测无冲突;设置页可自定义,注册失败自动回滚并提示
 - [x] 需要一份**旧插件导出的真实备份 JSON** 作为 phase 06 的导入测试样本 — 用户提供,一次导入成功
+
+## 收官记录（2026-07-17）
+
+**v1-launch 七个 phase 全部完成并经用户验收。** 产出:可安装的 Tomato Monster_0.1.0.dmg(6.6MB),
+功能对齐旧 Chrome 插件 + 菜单栏形态能力(托盘三态倒计时/全局快捷键/自启/钉住面板干预),
+历史数据已迁移,Notion 通道已验证。性能预算除内存(~107MB vs 100MB,用户认可取舍)外全部达标。
+后续:按 PRD §6 进入 30 天 dogfood 观察期;v2 候选项(缓冲式锁屏/afraid hover 彩蛋)见 PRD §7 与 phase 文档。
 
 ## 关联
 
