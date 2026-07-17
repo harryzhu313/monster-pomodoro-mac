@@ -9,6 +9,7 @@
 - **后端 Rust**(Tauri 壳):计时状态机、持久化、音频、托盘、窗口管理、系统集成。
 - **前端 vanilla JS(ES modules)+ CSS 变量,无构建工具**——延续旧版"无构建"哲学。`tauri.conf.json` 设 `app.withGlobalTauri: true`,前端直接用 `window.__TAURI__` 调 IPC,不引入 npm bundler。
 - **不用 TypeScript**:无构建约定优先;复杂数据结构用 JSDoc 注释表达类型。
+- **Rust 依赖基线**:tauri 2.x、serde / serde_json(持久化)、chrono(本地时区日切——配额 / 统计 / 连击都按本地日期结算,对齐旧版 `todayStr()` 行为)、rodio(音频)、window-vibrancy(毛玻璃)+ §6 的官方插件。新增依赖先在此登记再装。
 
 ## 2. 职责划分(核心架构决策)
 
