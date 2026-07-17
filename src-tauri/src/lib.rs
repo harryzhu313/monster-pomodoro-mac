@@ -67,7 +67,9 @@ fn run_effects(app: &AppHandle, settings: &store::Settings, effects: &[Effect]) 
             Effect::WhiteNoiseStop => state.audio.send(AudioCmd::NoiseStop),
             Effect::PanelPin => {
                 state.panel_pinned.store(true, Ordering::SeqCst);
-                show_panel(app, false); // 不抢键盘焦点(用户拍板)
+                // 不抢键盘焦点(用户拍板);此处仍持有调用方的 store 锁,
+                // 用不广播的窗口操作版本——紧随其后的 sync_out 会广播最新快照
+                show_panel_window(app, false);
             }
             Effect::PanelUnpin => {
                 state.panel_pinned.store(false, Ordering::SeqCst);
@@ -508,8 +510,11 @@ async fn set_history_task_done(app: AppHandle, date: String, id: serde_json::Val
 
 // —— 窗口/托盘 ——
 
-/// 显示面板;focus=false 时不抢键盘焦点(休息自动弹出用)
-fn show_panel(app: &AppHandle, focus: bool) {
+/// 显示面板;focus=false 时不抢键盘焦点(休息自动弹出用)。
+/// 只做窗口操作,不广播快照——调用方如果没有在锁内(effect 执行器以外的独立调用点),
+/// 用下面的 show_panel 补一拍;effect 执行器内已持有 store 锁,广播交给紧随其后的 sync_out,
+/// 避免在锁内重入 emit_fresh_snapshot 造成同线程自死锁(实际使用中每次专注结束必现)。
+fn show_panel_window(app: &AppHandle, focus: bool) {
     if let Some(panel) = app.get_webview_window("panel") {
         // 托盘位置未知时(如刚启动未碰过托盘)定位会失败,退回右上角
         if panel.as_ref().window().move_window(Position::TrayBottomCenter).is_err() {
@@ -520,8 +525,13 @@ fn show_panel(app: &AppHandle, focus: bool) {
             let _ = panel.set_focus();
         }
         app.state::<AppState>().panel_visible.store(true, Ordering::SeqCst);
-        emit_fresh_snapshot(app); // 隐藏期间不广播,显示瞬间补一拍最新状态
     }
+}
+
+/// show_panel_window + 广播一拍最新快照;非 effect 路径的独立调用点(启动恢复、托盘点击)用这个
+fn show_panel(app: &AppHandle, focus: bool) {
+    show_panel_window(app, focus);
+    emit_fresh_snapshot(app); // 隐藏期间不广播,显示瞬间补一拍最新状态
 }
 
 /// 只广播不落盘:窗口从隐藏转可见时刷新其显示
