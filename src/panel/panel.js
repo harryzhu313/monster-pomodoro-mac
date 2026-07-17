@@ -324,6 +324,7 @@ els.btnPrimary.addEventListener('click', () => {
 });
 els.btnAbandon.addEventListener('click', () => invoke('abandon'));
 els.btnReset.addEventListener('click', () => invoke('reset'));
+els.btnStats.addEventListener('click', () => invoke('open_stats'));
 els.quota.addEventListener('dblclick', () => invoke('reset_quota'));
 
 // —— 加时(平移旧 lockscreen.js claim 逻辑)——

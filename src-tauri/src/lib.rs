@@ -219,6 +219,62 @@ fn delete_task(app: AppHandle, id: serde_json::Value) {
     with_store(&app, |d, _, today, _| timer::delete_task(d, today, &id));
 }
 
+// —— 统计与设置窗口 ——
+
+#[tauri::command]
+fn open_stats(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("stats") {
+        let _ = w.set_focus();
+        return;
+    }
+    // 按需创建,关闭销毁(ARCHITECTURE §3)
+    match tauri::WebviewWindowBuilder::new(
+        &app,
+        "stats",
+        tauri::WebviewUrl::App("stats/stats.html".into()),
+    )
+    .title("Tomato Monster · 统计与设置")
+    .inner_size(680.0, 760.0)
+    .min_inner_size(560.0, 480.0)
+    .transparent(true)
+    .build()
+    {
+        Ok(w) => {
+            #[cfg(target_os = "macos")]
+            if let Err(e) = window_vibrancy::apply_vibrancy(
+                &w,
+                window_vibrancy::NSVisualEffectMaterial::UnderWindowBackground,
+                None,
+                None,
+            ) {
+                eprintln!("stats vibrancy 失败: {e}");
+            }
+        }
+        Err(e) => eprintln!("stats 窗口创建失败: {e}"),
+    }
+}
+
+#[tauri::command]
+fn get_stats_bundle(app: AppHandle) -> timer::StatsBundle {
+    let state = app.state::<AppState>();
+    let mut guard = state.store.lock().expect("store lock poisoned");
+    let today = timer::today_str();
+    timer::roll_over_tasks_if_needed(&mut guard.data, &today);
+    timer::stats_bundle(&guard.data, &today)
+}
+
+#[tauri::command]
+fn clear_today_stats(app: AppHandle) {
+    with_store(&app, |d, _, today, _| timer::clear_today_stats(d, today));
+}
+
+#[tauri::command]
+fn set_history_task_done(app: AppHandle, date: String, id: serde_json::Value, done: bool) {
+    with_store(&app, |d, _, today, _| {
+        timer::set_history_task_done(d, today, &date, &id, done)
+    });
+}
+
 // —— 窗口/托盘 ——
 
 /// 显示面板;focus=false 时不抢键盘焦点(休息自动弹出用)
@@ -326,6 +382,11 @@ pub fn run() {
                 println!("[TOMATO_AUTOSTART] 已自动开始专注");
             }
 
+            // 开发自测钩子:启动即开统计窗口(验证窗口创建/vibrancy,仅测试用)
+            if std::env::var("TOMATO_OPEN_STATS").map(|v| v == "1").unwrap_or(false) {
+                open_stats(app.handle().clone());
+            }
+
             // tick 线程:每秒驱动到点结算 + 托盘标题 + 快照广播(endTime 制,tick 只是采样)
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -395,7 +456,11 @@ pub fn run() {
             add_task,
             set_task_done,
             set_current_task,
-            delete_task
+            delete_task,
+            open_stats,
+            get_stats_bundle,
+            clear_today_stats,
+            set_history_task_done
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

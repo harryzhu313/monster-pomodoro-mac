@@ -544,6 +544,69 @@ pub fn delete_task(data: &mut StoreData, today: &str, id: &Value) {
     data.tasks_today.tasks.retain(|t| !task_id_eq(&t.id, id));
 }
 
+// —— 统计窗口数据包与历史操作(平移旧 options.js)——
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BadgesFull {
+    pub badges: u32,
+    pub current_streak: u32,
+    pub goal: u32,
+    pub unlocked_dates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsBundle {
+    pub stats: std::collections::BTreeMap<String, crate::store::StatEntry>,
+    pub tasks_archive: std::collections::BTreeMap<String, Vec<Task>>,
+    pub tasks_today: crate::store::TasksToday,
+    pub badges: BadgesFull,
+    pub notion_export_log: serde_json::Map<String, Value>,
+    pub today: String,
+}
+
+pub fn stats_bundle(data: &StoreData, today: &str) -> StatsBundle {
+    let view = get_badges_view(data, today);
+    StatsBundle {
+        stats: data.stats.clone(),
+        tasks_archive: data.tasks_archive.clone(),
+        tasks_today: data.tasks_today.clone(),
+        badges: BadgesFull {
+            badges: view.badges,
+            current_streak: view.current_streak,
+            goal: view.goal,
+            unlocked_dates: data.badges_state.unlocked_dates.clone(),
+        },
+        notion_export_log: data.notion_export_log.clone(),
+        today: today.to_string(),
+    }
+}
+
+/// 清零今日:只删当天 stats 计数,不动任务(旧 performClearToday)
+pub fn clear_today_stats(data: &mut StoreData, today: &str) {
+    data.stats.remove(today);
+}
+
+/// 历史明细里改任务完成态:今天走 tasksToday,其余日期改归档(旧 options setTaskDone)
+pub fn set_history_task_done(data: &mut StoreData, today: &str, date: &str, id: &Value, done: bool) {
+    if date == today {
+        set_task_done(data, today, id, done);
+        return;
+    }
+    if let Some(tasks) = data.tasks_archive.get_mut(date) {
+        for t in tasks {
+            if task_id_eq(&t.id, id) {
+                t.done = done;
+                t.done_override = Some(done);
+                if done {
+                    t.is_current = false;
+                }
+            }
+        }
+    }
+}
+
 // —— settings 更新(patch 合并 + 数值 clamp)——
 
 pub fn update_settings(data: &mut StoreData, patch: Value) {

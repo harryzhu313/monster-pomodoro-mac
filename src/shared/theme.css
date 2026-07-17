@@ -32,6 +32,12 @@
   --current-task-bg: rgba(255, 246, 238, 0.75);
   --current-task-border: #e8b88f;
 
+  /* 热力图四级色阶(success 绿系,0 级用表面色) */
+  --heat-0: rgba(0, 0, 0, 0.06);
+  --heat-1: rgba(74, 138, 92, 0.35);
+  --heat-2: rgba(74, 138, 92, 0.65);
+  --heat-3: #4a8a5c;
+
   /* typography */
   --font-body: -apple-system, 'PingFang SC', sans-serif;
   --font-display: -apple-system, 'SF Pro Display', 'PingFang SC', sans-serif;
@@ -82,5 +88,10 @@
     --cat-hobby-fg: #c49ad4;
     --current-task-bg: rgba(217, 79, 58, 0.12);
     --current-task-border: rgba(232, 184, 143, 0.45);
+
+    --heat-0: rgba(255, 255, 255, 0.08);
+    --heat-1: rgba(93, 166, 113, 0.4);
+    --heat-2: rgba(93, 166, 113, 0.7);
+    --heat-3: #5da671;
   }
 }
