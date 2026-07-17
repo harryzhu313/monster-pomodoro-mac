@@ -15,12 +15,14 @@
         "url": "panel/panel.html",
         "title": "Tomato Monster",
         "width": 300,
-        "height": 420,
+        "height": 480,
         "resizable": false,
         "decorations": false,
         "transparent": true,
         "visible": false,
+        "focus": false,
         "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
         "skipTaskbar": true
       }
     ],

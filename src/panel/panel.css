@@ -67,6 +67,92 @@ body.theme-monster .monster[src] {
 .phase-label.breaking { color: var(--success); }
 .phase-label.paused   { color: var(--warning); }
 
+/* 休息期副标题(MONSTER_SUBTITLES 随机句,或 default 主题静态文案) */
+.break-subtitle {
+  font: var(--text-caption);
+  color: var(--on-neutral-muted);
+  margin-bottom: var(--space-xs);
+}
+
+/* —— 加时区块(平移旧 lockscreen.js extend 区)—— */
+
+.extend {
+  border-top: 1px solid var(--border-hairline);
+  padding-top: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.extend-title {
+  font: var(--text-caption);
+  color: var(--on-neutral-muted);
+  margin-bottom: var(--space-xs);
+}
+
+.extend-options,
+.extend-custom {
+  display: flex;
+  gap: var(--space-xs);
+  justify-content: center;
+}
+
+.extend-custom {
+  margin-top: var(--space-xs);
+}
+
+.ext-btn {
+  font: var(--text-caption);
+  padding: 5px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  cursor: pointer;
+}
+
+.ext-btn:hover:not(:disabled) {
+  box-shadow: var(--elevation-sm);
+}
+
+.ext-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ext-btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.ext-btn.ghost {
+  border: none;
+  background: transparent;
+  color: var(--on-neutral-muted);
+}
+
+.extend-custom input {
+  width: 96px;
+  padding: 5px 8px;
+  font: var(--text-caption);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  font-variant-numeric: tabular-nums;
+}
+
+.extend-custom input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.extend-note {
+  font: var(--text-caption);
+  color: var(--warning);
+  min-height: 15px;
+  margin-top: var(--space-xs);
+}
+
 .timer {
   font: var(--text-display);
   font-variant-numeric: tabular-nums;

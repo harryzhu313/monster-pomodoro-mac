@@ -52,6 +52,9 @@ pub struct TimerState {
     pub focus_started_at: Option<i64>,
     /// 7 天奖励命中时,休息开始后一小段时间内展示 love monster
     pub love_monster_until: Option<i64>,
+    /// 本次休息的副标题(进入休息时从 MONSTER_SUBTITLES 池随机挑,面板与通知共用)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub break_subtitle: Option<String>,
 }
 
 // —— quotaState(惰性日切:date 不是今天就视为全新一天)——
@@ -74,6 +77,8 @@ pub struct Settings {
     pub long_break_enabled: bool,
     pub long_break_every: u32,
     pub long_break_minutes: u32,
+    /// 最后一分钟提示(新设置项,旧版挂在 chimeEnabled 下,PRD §5 拆为独立开关)
+    pub last_minute_enabled: bool,
     pub theme: String,
     /// 未识别字段原样保留,前向兼容(如未来版本的新设置)
     #[serde(flatten)]
@@ -89,6 +94,7 @@ impl Default for Settings {
             long_break_enabled: true,
             long_break_every: 4,
             long_break_minutes: 20,
+            last_minute_enabled: true,
             // 与旧版默认(default,隐藏小怪兽)不同:用户 2026-07-17 拍板默认展示小怪兽
             theme: "monster".into(),
             extra: Map::new(),

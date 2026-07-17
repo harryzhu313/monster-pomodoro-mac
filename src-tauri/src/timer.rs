@@ -46,12 +46,33 @@ pub fn durations() -> Durations {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
     Chime,
+    /// 最后一分钟的轻提示音(G5→C6,比 chime 短)。纯声音,无系统通知
+    SoftNudge,
     WhiteNoiseStart,
     WhiteNoiseStop,
-    /// body 中 {SUBTITLE} 占位符由 phase 04 用 MONSTER_SUBTITLES 池替换
-    Notify { title: String, body: String },
+    /// 休息开始:面板自动弹出并钉住——不抢键盘焦点,点任何地方都不收起
+    /// (2026-07-17 用户决策:替代系统通知,通知三处全删)
+    PanelPin,
+    /// 休息结束/加时成功:解除钉住并收起面板
+    PanelUnpin,
     /// 7 天连击命中,phase 07 弹 love monster
     Celebration,
+}
+
+/// 品牌语气文案池(平移旧 content/lockscreen.js:435 MONSTER_SUBTITLES,一字不改)
+pub const MONSTER_SUBTITLES: [&str; 8] = [
+    "坐了这么久,你的眼睛和脖子都不高兴了。",
+    "屏幕看够了,眼睛在小声求你眨一眨。",
+    "你的腰在偷偷抗议,先站起来走两步吧。",
+    "肩膀已经硬得像块砖,该活动一下了。",
+    "盯这么久,眼睛快要罢工啦。",
+    "脖子想回到它本来的角度,让它歇会儿。",
+    "站起来,活动一下吧。",
+    "你的手腕也需要一点自由时间。",
+];
+
+fn pick_subtitle(now: i64) -> String {
+    MONSTER_SUBTITLES[(now as usize) % MONSTER_SUBTITLES.len()].to_string()
 }
 
 // —— 日期工具(本地时区,对齐旧 todayStr)——
@@ -271,6 +292,7 @@ pub fn start_focus(data: &mut StoreData, now: i64, dur: &Durations) {
         pre_pause_state: None,
         focus_started_at: Some(now),
         love_monster_until: None,
+        break_subtitle: None,
     };
 }
 
@@ -359,6 +381,7 @@ pub fn claim_extra_time(data: &mut StoreData, ms: i64, now: i64, today: &str) ->
         pre_pause_state: None,
         focus_started_at: Some(now),
         love_monster_until: None,
+        break_subtitle: None,
     };
     OvertimeOutcome { ok: true, reason: None }
 }
@@ -368,6 +391,8 @@ fn start_break(data: &mut StoreData, now: i64, today: &str, dur: &Durations) -> 
     let kind = if should_take_long_break(completed_today, data) { "long" } else { "short" };
     let awarded = record_break_entry_milestone(data, today);
     let duration = break_duration_ms(kind, data, dur);
+    // 面板副标题与系统通知正文共用同一句(CONTENT.md:正文从 MONSTER_SUBTITLES 随机挑)
+    let subtitle = pick_subtitle(now);
     data.timer_state = TimerState {
         state: TimerPhase::Breaking,
         phase: Some("break".into()),
@@ -377,19 +402,41 @@ fn start_break(data: &mut StoreData, now: i64, today: &str, dur: &Durations) -> 
         pre_pause_state: None,
         focus_started_at: None,
         love_monster_until: awarded.then(|| now + LOVE_CELEBRATION_MS),
+        // 副标题经 timerState.breakSubtitle 到达面板(系统通知已按用户决策移除)
+        break_subtitle: Some(subtitle),
     };
-    let mut effects = vec![
-        // 文案对齐 CONTENT.md"系统通知"节;{SUBTITLE} 由 phase 04 从 MONSTER_SUBTITLES 池填充
-        Effect::Notify {
-            title: "25 分钟到了,该停下来了".into(),
-            body: "{SUBTITLE}".into(),
-        },
-        Effect::WhiteNoiseStart,
-    ];
+    let mut effects = vec![Effect::PanelPin, Effect::WhiteNoiseStart];
     if awarded {
         effects.push(Effect::Celebration);
     }
     effects
+}
+
+/// 最后一分钟提示:FOCUSING 剩余进入最后一分钟窗口时触发一次(按 endTime 去重,
+/// 等价旧 LAST_MINUTE_STATE_KEY 机制)。fired 由调用方持有(内存态,不持久化)。
+pub fn check_last_minute(
+    data: &StoreData,
+    now: i64,
+    dur: &Durations,
+    fired: &mut Option<i64>,
+) -> Vec<Effect> {
+    let s = &data.timer_state;
+    if s.state != TimerPhase::Focusing {
+        return vec![];
+    }
+    let Some(end) = s.end_time else { return vec![] };
+    if *fired == Some(end) {
+        return vec![];
+    }
+    let remaining = end - now;
+    if remaining <= 0 || remaining > dur.last_minute_ms {
+        return vec![];
+    }
+    *fired = Some(end); // 关掉开关时也记为已处理,避免中途打开立刻响
+    if !data.settings.last_minute_enabled {
+        return vec![];
+    }
+    vec![Effect::SoftNudge]
 }
 
 /// 到点结算。只在 FOCUSING/BREAKING 且 now >= endTime 时生效,由 tick 循环驱动。
@@ -415,20 +462,13 @@ pub fn handle_phase_end_if_due(data: &mut StoreData, now: i64, today: &str, dur:
         return effects;
     }
 
-    // 休息结束:停白噪音 → chime → 自动/手动开始下一轮
-    let mut effects = vec![Effect::WhiteNoiseStop, Effect::Chime];
+    // 休息结束:停白噪音 → chime → 收起面板 → 自动/手动开始下一轮
+    // (自动/手动模式都收起面板,用户 2026-07-17 拍板)
+    let mut effects = vec![Effect::WhiteNoiseStop, Effect::Chime, Effect::PanelUnpin];
     ensure_anchor(data, today);
     if data.settings.auto_start_next_focus {
-        effects.push(Effect::Notify {
-            title: "休息好了,回来吧".into(),
-            body: "下一个番茄已经开始了".into(),
-        });
         start_focus(data, now, dur);
     } else {
-        effects.push(Effect::Notify {
-            title: "休息好了,回来吧".into(),
-            body: "准备好就开始下一个".into(),
-        });
         reset(data, true);
     }
     effects
@@ -592,9 +632,10 @@ pub fn tray_title(state: &TimerState, now: i64) -> Option<String> {
         let total = (ms.max(0) + 999) / 1000;
         format!("{:02}:{:02}", total / 60, total % 60)
     };
+    // 休息期红色提示符(ARCHITECTURE §3:"休息期间加红色提示符"——🔴 在菜单栏渲染为彩色)
     let fmt_break = |ms: i64| {
         let total = (ms.max(0) + 999) / 1000;
-        format!("休息 {}:{:02}", total / 60, total % 60)
+        format!("🔴 休息 {}:{:02}", total / 60, total % 60)
     };
     match state.state {
         TimerPhase::Focusing => Some(fmt_mmss(state.end_time? - now)),
@@ -856,6 +897,51 @@ mod tests {
         assert_eq!(tray_title(&s, 0).unwrap(), "24:59");
         s.state = TimerPhase::Breaking;
         s.end_time = Some(4 * 60 * 1000 + 32_000);
-        assert_eq!(tray_title(&s, 0).unwrap(), "休息 4:32");
+        assert_eq!(tray_title(&s, 0).unwrap(), "🔴 休息 4:32");
+    }
+
+    #[test]
+    fn last_minute_fires_once_per_end_time() {
+        let mut d = StoreData::default();
+        let now = 1_000_000_000;
+        start_focus(&mut d, now, &DUR);
+        let end = d.timer_state.end_time.unwrap();
+        let mut fired = None;
+        // 还没进最后一分钟窗口
+        assert!(check_last_minute(&d, end - 90_000, &DUR, &mut fired).is_empty());
+        // 进窗口:触发一次
+        let effects = check_last_minute(&d, end - 30_000, &DUR, &mut fired);
+        assert!(effects.contains(&Effect::SoftNudge));
+        // 同一 endTime 不再触发
+        assert!(check_last_minute(&d, end - 20_000, &DUR, &mut fired).is_empty());
+        // 关掉开关:静默但仍记为已处理
+        d.settings.last_minute_enabled = false;
+        let mut fired2 = None;
+        assert!(check_last_minute(&d, end - 30_000, &DUR, &mut fired2).is_empty());
+        assert_eq!(fired2, Some(end));
+    }
+
+    #[test]
+    fn break_entry_picks_subtitle_and_pins_panel() {
+        let mut d = StoreData::default();
+        let now = 1_000_000_000;
+        d.stats.entry(T.into()).or_default().completed = 1;
+        let effects = start_break(&mut d, now, T, &DUR);
+        let subtitle = d.timer_state.break_subtitle.clone().unwrap();
+        assert!(MONSTER_SUBTITLES.contains(&subtitle.as_str()));
+        // 休息开始:面板钉住 + 白噪音
+        assert!(effects.contains(&Effect::PanelPin));
+        assert!(effects.contains(&Effect::WhiteNoiseStart));
+    }
+
+    #[test]
+    fn break_end_unpins_panel() {
+        let mut d = StoreData::default();
+        let now = 1_000_000_000;
+        d.stats.entry(T.into()).or_default().completed = 1;
+        start_break(&mut d, now, T, &DUR);
+        let end = d.timer_state.end_time.unwrap();
+        let effects = handle_phase_end_if_due(&mut d, end, T, &DUR);
+        assert!(effects.contains(&Effect::PanelUnpin));
     }
 }

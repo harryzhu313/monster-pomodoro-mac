@@ -25,7 +25,7 @@
 | 窗口 | 形态 | 实现要点 |
 |---|---|---|
 | 托盘 | 菜单栏图标 + `mm:ss` 标题 | Tauri `TrayIcon`,`iconAsTemplate: true`(单色模板剪影,三态);标题文字每秒由 Rust 更新,休息期间加红色提示符 |
-| 主面板 | 300px 无边框弹出,失焦即隐 | 点托盘图标显示 / 隐藏;`tauri-plugin-positioner` 定位到托盘图标下方;**隐藏而非销毁**(保留 DOM 状态,秒开) |
+| 主面板 | 300px 无边框弹出,失焦即隐 | 点托盘图标显示 / 隐藏;`tauri-plugin-positioner` 定位到托盘图标下方;**隐藏而非销毁**(保留 DOM 状态,秒开);**休息期钉住**:自动弹出、失焦不隐、托盘点击不收起、不抢键盘焦点(2026-07-17 替代系统通知的决策,通知插件已移除) |
 | 统计与设置 | 常规可调窗口(最小 560px) | 按需创建,关闭销毁 |
 | 庆祝弹层 | 全屏无边框透明,点击即关 | love monster 7 天连击奖励;临时窗口,展示完销毁 |
 
@@ -51,7 +51,6 @@
 
 | 能力 | 插件 | 说明 |
 |---|---|---|
-| 通知 | `tauri-plugin-notification` | 到点提醒;首启引导授权 |
 | 全局快捷键 | `tauri-plugin-global-shortcut` | 默认 `⌃⌥P` 开始 / 暂停;设置里可改可关;注册失败(冲突)时降级提示 |
 | 开机自启 | `tauri-plugin-autostart` | 设置里开关,默认关(首启引导询问) |
 | Notion API | `tauri-plugin-http` | scope 仅 `https://api.notion.com/*`;前端现有 fetch 导出代码近乎原样移植(换成 plugin-http 的 fetch),无 CORS |

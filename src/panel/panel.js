@@ -48,7 +48,16 @@ const els = {
   btnPrimary: document.getElementById('btn-primary'),
   btnAbandon: document.getElementById('btn-abandon'),
   btnReset: document.getElementById('btn-reset'),
-  btnOvertime: document.getElementById('btn-overtime'),
+  breakSubtitle: document.getElementById('break-subtitle'),
+  extend: document.getElementById('extend'),
+  extTitle: document.getElementById('ext-title'),
+  extOptions: document.getElementById('ext-options'),
+  extCustom: document.getElementById('ext-custom'),
+  extCustomBtn: document.getElementById('ext-custom-btn'),
+  extInput: document.getElementById('ext-input'),
+  extConfirm: document.getElementById('ext-confirm'),
+  extCancel: document.getElementById('ext-cancel'),
+  extNote: document.getElementById('ext-note'),
   quota: document.getElementById('quota'),
   hint: document.getElementById('hint'),
   btnStats: document.getElementById('btn-stats'),
@@ -79,7 +88,29 @@ function renderTimer() {
 
   els.timer.textContent = formatMs(computeRemaining(snap));
   els.phaseLabel.className = 'phase-label';
-  els.btnOvertime.classList.toggle('is-hidden', state !== 'BREAKING');
+
+  // 加时区块与副标题只在休息中出现;离开休息态时收起自定义输入、清提示
+  const breaking = state === 'BREAKING';
+  els.extend.classList.toggle('is-hidden', !breaking);
+  els.breakSubtitle.classList.toggle('is-hidden', !breaking);
+  if (!breaking && !els.extCustom.classList.contains('is-hidden')) {
+    els.extCustom.classList.add('is-hidden');
+    els.extOptions.classList.remove('is-hidden');
+    els.extNote.textContent = '';
+  }
+  if (breaking) {
+    // monster 主题用后端挑好的随机句(与系统通知同一句);default 主题用静态文案
+    els.breakSubtitle.textContent =
+      snap.settings.theme === 'monster'
+        ? (isLongBreak ? '这是长休息,真的离开屏幕一会儿。' : t.breakSubtitle || '')
+        : (isLongBreak
+            ? '这是长休息。站起来,走远一点,让眼睛和身体都缓过来。'
+            : '站起来,离开屏幕。看看窗外,喝口水。');
+    const exhausted = snap.quota.remaining <= 0;
+    els.extTitle.textContent = exhausted ? '今日配额已用完' : '还没做完？用一次配额再专注一会';
+    els.extOptions.querySelectorAll('.ext-btn').forEach((b) => (b.disabled = exhausted));
+    els.extConfirm.disabled = exhausted;
+  }
 
   if (state === 'IDLE') {
     els.phaseLabel.textContent = '准备开始';
@@ -294,6 +325,58 @@ els.btnPrimary.addEventListener('click', () => {
 els.btnAbandon.addEventListener('click', () => invoke('abandon'));
 els.btnReset.addEventListener('click', () => invoke('reset'));
 els.quota.addEventListener('dblclick', () => invoke('reset_quota'));
+
+// —— 加时(平移旧 lockscreen.js claim 逻辑)——
+// 预设按钮:TEST_MODE 下分钟当秒算,方便快测;自定义输入始终按真·分钟换算。
+
+function minutesToMs(min) {
+  return snap?.durations?.testMode ? min * 1000 : min * 60 * 1000;
+}
+
+async function claim(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    els.extNote.textContent = '无效的时长。';
+    return;
+  }
+  const resp = await invoke('overtime', { ms });
+  if (resp && !resp.ok) {
+    els.extNote.textContent =
+      resp.reason === 'quota-exhausted' ? '今日配额已用完。' : '无法加时。';
+  }
+  // 成功时 state-update 广播会把面板切回专注态,无需手动处理
+}
+
+els.extOptions.querySelectorAll('[data-min]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    claim(minutesToMs(Number(btn.dataset.min)));
+  });
+});
+
+els.extCustomBtn.addEventListener('click', () => {
+  if (els.extCustomBtn.disabled) return;
+  els.extOptions.classList.add('is-hidden');
+  els.extCustom.classList.remove('is-hidden');
+  els.extInput.focus();
+});
+
+els.extCancel.addEventListener('click', () => {
+  els.extCustom.classList.add('is-hidden');
+  els.extOptions.classList.remove('is-hidden');
+  els.extNote.textContent = '';
+});
+
+els.extConfirm.addEventListener('click', () => {
+  if (els.extConfirm.disabled) return;
+  claim(Number(els.extInput.value) * 60 * 1000);
+});
+
+els.extInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    els.extConfirm.click();
+  }
+});
 
 els.taskAddForm.addEventListener('submit', (e) => {
   e.preventDefault();
