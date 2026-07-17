@@ -1,0 +1,64 @@
+/* Phase 01 spike 样式。正式 token 体系(shared/theme.css)在 phase 03 按 DESIGN.md 落地。
+   背景保持透明,让窗口 vibrancy 透出来——这里只放最小可读样式。 */
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  color: rgb(40, 36, 32);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.panel {
+  padding: 20px 16px;
+}
+
+h1 {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+
+.hint {
+  font-size: 12px;
+  opacity: 0.7;
+  line-height: 1.6;
+  margin: 0 0 16px;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+
+button:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    color: rgb(235, 232, 228);
+  }
+
+  button {
+    border-color: rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  button:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+}

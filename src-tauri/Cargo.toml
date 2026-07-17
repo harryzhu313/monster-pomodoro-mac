@@ -1,0 +1,19 @@
+[package]
+name = "tomato-monster"
+version = "0.1.0"
+description = "Tomato Monster · 按时停下来 — macOS 菜单栏番茄钟"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "tomato_monster_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+window-vibrancy = "0.6"
+rodio = "0.20"
