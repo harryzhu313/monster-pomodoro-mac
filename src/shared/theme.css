@@ -32,6 +32,10 @@
   --current-task-bg: rgba(255, 246, 238, 0.75);
   --current-task-border: #e8b88f;
 
+  /* 窗口基调罩:DESIGN"浅色模式暖白基调(#f6f5f0 罩)"——盖在 vibrancy 上保可读性。
+     0.88 对齐原生菜单的近实色质感(用户以 CodexBar 菜单为基准拍板) */
+  --window-wash: rgba(246, 245, 240, 0.88);
+
   /* 热力图四级色阶(success 绿系,0 级用表面色) */
   --heat-0: rgba(0, 0, 0, 0.06);
   --heat-1: rgba(74, 138, 92, 0.35);
@@ -88,6 +92,8 @@
     --cat-hobby-fg: #c49ad4;
     --current-task-bg: rgba(217, 79, 58, 0.12);
     --current-task-border: rgba(232, 184, 143, 0.45);
+
+    --window-wash: rgba(31, 30, 28, 0.88);
 
     --heat-0: rgba(255, 255, 255, 0.08);
     --heat-1: rgba(93, 166, 113, 0.4);

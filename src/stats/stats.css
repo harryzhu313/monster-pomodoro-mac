@@ -9,9 +9,13 @@
 
 html,
 body {
-  background: transparent;
+  /* 暖色基调罩盖在 vibrancy 上:保留毛玻璃质感,压住花哨壁纸(DESIGN Colors 节) */
+  background: var(--window-wash);
   font: var(--text-body);
   color: var(--on-neutral);
+  /* 滚动回弹会露出文档外的透明底,关掉回弹(用户反馈"下滑的边") */
+  overscroll-behavior: none;
+  min-height: 100%;
 }
 
 .page {

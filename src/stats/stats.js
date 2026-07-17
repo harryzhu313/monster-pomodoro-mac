@@ -2,6 +2,8 @@
 // 数据来源:get_state 快照(settings/last7Days) + get_stats_bundle(整年 stats/归档/徽章)。
 // 设置改动 → update_settings command;历史完成态 → set_history_task_done。
 
+import * as notion from './notion.js';
+
 const tauri = window.__TAURI__ ?? null;
 
 async function invoke(cmd, args) {
@@ -10,6 +12,17 @@ async function invoke(cmd, args) {
     return null;
   }
   return tauri.core.invoke(cmd, args);
+}
+
+// WKWebView 不支持原生 window.confirm/alert,走 dialog 插件(浏览器预览时回退原生)
+async function confirmDialog(msg) {
+  if (tauri?.dialog?.confirm) return tauri.dialog.confirm(msg, { title: 'Tomato Monster' });
+  return window.confirm(msg);
+}
+
+async function messageDialog(msg) {
+  if (tauri?.dialog?.message) return tauri.dialog.message(msg, { title: 'Tomato Monster' });
+  window.alert(msg);
 }
 
 const els = {
@@ -37,6 +50,15 @@ const els = {
   heatmapGrid: document.getElementById('heatmap-grid'),
   heatmapMonths: document.getElementById('heatmap-months'),
   heatmapMeta: document.getElementById('heatmap-meta'),
+  btnExportBackup: document.getElementById('btn-export-backup'),
+  btnImportBackup: document.getElementById('btn-import-backup'),
+  backupFile: document.getElementById('backup-file'),
+  backupStatus: document.getElementById('backup-status'),
+  notionToken: document.getElementById('notion-token'),
+  notionTaskDb: document.getElementById('notion-task-db'),
+  notionDayDb: document.getElementById('notion-day-db'),
+  notionStatus: document.getElementById('notion-status'),
+  btnNotionTest: document.getElementById('btn-notion-test'),
 };
 
 const HISTORY_MAX_DAYS = 30;
@@ -296,7 +318,7 @@ function renderHistoryDay(date, tasks, totalToday, isToday) {
   const exportedClass = exportLog && exportLog.ok ? ' is-exported' : '';
   const exportLabel = exportLog && exportLog.ok ? `已导入 ${exportLog.created}` : '导入到 Notion';
   const exportBtnHtml = tasks.length
-    ? `<button type="button" class="history-day-export${exportedClass}" data-date="${date}" disabled title="Notion 功能即将接入(phase 06)">${exportLabel}</button>`
+    ? `<button type="button" class="history-day-export${exportedClass}" data-date="${date}">${exportLabel}</button>`
     : '';
   const tasksHtml = tasks.length
     ? tasks.map((t) => renderHistoryTask(t, date)).join('')
@@ -344,7 +366,50 @@ function renderHistory() {
     .join('');
 }
 
+// 某日任务导出到 Notion(反馈文案平移旧 exportDayToNotion,alert 换 dialog 插件)
+async function exportDayToNotion(date, btn) {
+  if (!btn || btn.disabled) return;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '导入中…';
+  const tasks = date === bundle.today ? bundle.tasksToday.tasks : bundle.tasksArchive[date] || [];
+  try {
+    const result = await notion.exportDay(date, tasks);
+    if (!result.ok && !result.created && !result.updated) {
+      await messageDialog(`导入失败:${result.error || result.errors?.[0]?.error || '全部失败'}`);
+      btn.disabled = false;
+      btn.textContent = originalText;
+      return;
+    }
+    const rowMsg = `创建 ${result.created || 0} / 更新 ${result.updated || 0} / 总计 ${result.total || 0} 行`;
+    const linkMsg = result.dayPageLinked
+      ? '· 已关联所属日'
+      : '· 未关联所属日(日页面 DB ID 未配置或当天页面不存在)';
+    const duplicateMsg = result.existingDuplicates > 0
+      ? `\nNotion 中已有 ${result.existingDuplicates} 条同日同名重复行,本次只更新每组第一条。`
+      : '';
+    if (result.ok) {
+      await messageDialog(`导入成功:${rowMsg} ${linkMsg}${duplicateMsg}`);
+    } else {
+      const firstErr = result.errors?.[0];
+      const errMsg = firstErr ? `\n首个错误:${firstErr.task} - ${firstErr.error}` : '';
+      await messageDialog(`部分成功:${rowMsg}(失败 ${result.failed || 0}) ${linkMsg}${duplicateMsg}${errMsg}`);
+    }
+    await refreshBundle();
+  } catch (e) {
+    await messageDialog('导入失败:' + String(e.message || e));
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
 els.historyList.addEventListener('click', async (e) => {
+  const exportBtn = e.target.closest('.history-day-export');
+  if (exportBtn) {
+    e.stopPropagation();
+    if (exportBtn.dataset.date) exportDayToNotion(exportBtn.dataset.date, exportBtn);
+    return;
+  }
   const btn = e.target.closest('.history-task-btn');
   if (btn) {
     e.stopPropagation();
@@ -394,6 +459,102 @@ els.btnClearToday.addEventListener('click', async () => {
     els.btnClearToday.classList.remove('confirming');
     els.btnClearToday.textContent = '清零今日';
   }, 3000);
+});
+
+// —— 本地备份(语义平移旧 exportBackup/importBackupFile,保存路径走 dialog 插件)——
+
+function setBackupStatus(kind, text) {
+  els.backupStatus.className = 'backup-status is-' + kind;
+  els.backupStatus.textContent = text;
+}
+
+els.btnExportBackup.addEventListener('click', async () => {
+  const r = await invoke('export_backup');
+  if (!r) return;
+  if (r.canceled) {
+    setBackupStatus('warn', '已取消导出。');
+  } else if (r.ok) {
+    setBackupStatus('ok', `已导出 ${r.path}。删除或重装应用前,请保留这个文件。`);
+  } else {
+    setBackupStatus('error', `导出失败:${r.error}`);
+  }
+});
+
+els.btnImportBackup.addEventListener('click', () => els.backupFile.click());
+
+els.backupFile.addEventListener('change', async () => {
+  const file = els.backupFile.files?.[0];
+  els.backupFile.value = '';
+  if (!file) return;
+  try {
+    const text = await file.text();
+    let exportedAt = '未知时间';
+    try {
+      const at = JSON.parse(text)?.exportedAt;
+      if (at) exportedAt = new Date(at).toLocaleString();
+    } catch { /* 具体校验交给 Rust,这里只取展示信息 */ }
+    const ok = await confirmDialog(
+      `导入备份会覆盖当前历史、徽章和设置。\n\n备份时间:${exportedAt}\n文件:${file.name}\n\n确认继续?`
+    );
+    if (!ok) {
+      setBackupStatus('warn', '已取消导入,当前数据未修改。');
+      return;
+    }
+    const r = await invoke('import_backup', { json: text });
+    if (r?.ok) {
+      // 成功/失败文案对齐 CONTENT.md"备份导入反馈"节
+      setBackupStatus('ok', `导入完成,${r.days} 天的历史已接上,连击和热力图都在。`);
+      await refreshAll();
+    } else {
+      setBackupStatus(
+        'error',
+        `导入失败,现有数据没有被改动。原因:${r?.error || '未知'}。请确认这是 Tomato Monster 导出的备份文件。`
+      );
+    }
+  } catch (e) {
+    setBackupStatus('error', `导入失败,现有数据没有被改动。原因:${String(e.message || e)}。`);
+  }
+});
+
+// —— Notion 配置(平移旧 loadNotionConfig/saveNotionConfig/testNotionConnection)——
+
+function setNotionStatus(kind, text) {
+  els.notionStatus.className = 'notion-status is-' + kind;
+  els.notionStatus.textContent = text;
+}
+
+async function loadNotionConfig() {
+  const cfg = await notion.getNotionConfig();
+  els.notionToken.value = cfg.token || '';
+  els.notionTaskDb.value = cfg.taskDbId || '';
+  els.notionDayDb.value = cfg.dayDbId || '';
+}
+
+function saveNotionConfig() {
+  return notion.setNotionConfig({
+    token: els.notionToken.value.trim(),
+    taskDbId: els.notionTaskDb.value.trim(),
+    dayDbId: els.notionDayDb.value.trim(),
+  });
+}
+
+for (const el of [els.notionToken, els.notionTaskDb, els.notionDayDb]) {
+  el.addEventListener('blur', saveNotionConfig);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') el.blur();
+  });
+}
+
+els.btnNotionTest.addEventListener('click', async () => {
+  await saveNotionConfig();
+  setNotionStatus('loading', '正在连接 Notion…');
+  try {
+    const r = await notion.testConnection();
+    if (r.ok) setNotionStatus('ok', '✓ ' + r.message);
+    else setNotionStatus('error', '✗ ' + (r.error || '未知错误'));
+  } catch (e) {
+    setNotionStatus('error', '✗ ' + String(e.message || e));
+  }
 });
 
 // —— 刷新编排 ——
@@ -460,3 +621,4 @@ if (tauri) {
 
 setHistoryCollapsed(localStorage.getItem(HISTORY_COLLAPSED_KEY) === '1');
 refreshAll();
+loadNotionConfig();

@@ -169,6 +169,16 @@ pub struct BadgesState {
     pub anchor_date: Option<String>,
 }
 
+// —— Notion 配置(token 只存本地 store.json,权限 600;不进备份文件)——
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotionConfig {
+    pub token: String,
+    pub task_db_id: String,
+    pub day_db_id: String,
+}
+
 // —— 顶层 ——
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -183,6 +193,7 @@ pub struct StoreData {
     pub badges_state: BadgesState,
     pub last_category: Option<String>,
     pub notion_export_log: Map<String, Value>,
+    pub notion_config: NotionConfig,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -227,6 +238,135 @@ impl Store {
     }
 }
 
+// —— 备份导入 / 导出(ARCHITECTURE §4)——
+// 旧插件 v1 格式:{schemaVersion:1, exportedAt, appVersion, data:{stats, tasksToday,
+// tasksArchive, badgesState, settings, lastTaskCategory, notionExportLog}}
+// 新版导出 v2:结构相同,键名 lastCategory;导入兼容 v1/v2。
+// timerState / quotaState / notionConfig 不在备份范围(旧行为一致;token 不外泄)。
+
+pub const BACKUP_SCHEMA_VERSION: u64 = 2;
+
+/// settings 里浏览器特有项,导入时丢弃(ARCHITECTURE §4)
+const BROWSER_ONLY_SETTINGS: [&str; 1] = ["lockscreenBg"];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportOutcome {
+    pub ok: bool,
+    pub error: Option<String>,
+    /// 导入后 stats 覆盖的天数(成功文案用)
+    pub days: u32,
+}
+
+pub fn export_backup_json(data: &StoreData, app_version: &str) -> String {
+    let payload = serde_json::json!({
+        "schemaVersion": BACKUP_SCHEMA_VERSION,
+        "exportedAt": chrono::Local::now().to_rfc3339(),
+        "appVersion": app_version,
+        "data": {
+            "stats": data.stats,
+            "tasksToday": data.tasks_today,
+            "tasksArchive": data.tasks_archive,
+            "badgesState": data.badges_state,
+            "settings": data.settings,
+            "lastCategory": data.last_category,
+            "notionExportLog": data.notion_export_log,
+        }
+    });
+    serde_json::to_string_pretty(&payload).unwrap_or_default()
+}
+
+/// 导入:先在副本上完成全部校验与解析,全部成功才替换——任一步失败,现有数据零改动。
+/// 语义对齐旧 importBackupFile:备份里有的键整体覆盖,没有的键回默认值。
+pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
+    use serde::de::DeserializeOwned;
+
+    let payload: Value =
+        serde_json::from_str(text).map_err(|_| "备份文件不是有效的 JSON".to_string())?;
+    let obj = payload.as_object().ok_or("备份文件不是有效的 JSON 对象")?;
+    let version = obj.get("schemaVersion").and_then(Value::as_u64).unwrap_or(0);
+    if version != 1 && version != BACKUP_SCHEMA_VERSION {
+        return Err(format!("不支持的备份版本:{version}"));
+    }
+    let d = obj
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or("备份文件缺少 data 字段")?;
+
+    fn parse_key<T: DeserializeOwned>(
+        d: &Map<String, Value>,
+        key: &str,
+        what: &str,
+    ) -> Result<Option<T>, String> {
+        match d.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => serde_json::from_value(v.clone())
+                .map(Some)
+                .map_err(|e| format!("{what} 字段格式无效({e})")),
+        }
+    }
+
+    let mut next = data.clone();
+    let mut applied = false;
+    let mut apply = |present: bool| {
+        applied |= present;
+    };
+
+    let stats = parse_key::<BTreeMap<String, StatEntry>>(d, "stats", "stats")?;
+    apply(stats.is_some());
+    next.stats = stats.unwrap_or_default();
+
+    let tasks_today = parse_key::<TasksToday>(d, "tasksToday", "tasksToday")?;
+    apply(tasks_today.is_some());
+    next.tasks_today = tasks_today.unwrap_or_default();
+
+    let tasks_archive =
+        parse_key::<BTreeMap<String, Vec<Task>>>(d, "tasksArchive", "tasksArchive")?;
+    apply(tasks_archive.is_some());
+    next.tasks_archive = tasks_archive.unwrap_or_default();
+
+    let badges = parse_key::<BadgesState>(d, "badgesState", "badgesState")?;
+    apply(badges.is_some());
+    next.badges_state = badges.unwrap_or_default();
+
+    // settings:先剔除浏览器特有键再解析
+    match d.get("settings") {
+        None | Some(Value::Null) => next.settings = Settings::default(),
+        Some(v) => {
+            let mut v = v.clone();
+            if let Value::Object(ref mut m) = v {
+                for key in BROWSER_ONLY_SETTINGS {
+                    m.remove(key);
+                }
+            }
+            next.settings = serde_json::from_value(v)
+                .map_err(|e| format!("settings 字段格式无效({e})"))?;
+            apply(true);
+        }
+    }
+
+    // v2 用 lastCategory,v1 用 lastTaskCategory——两个键名都认
+    let last_category = d
+        .get("lastCategory")
+        .or_else(|| d.get("lastTaskCategory"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    apply(last_category.is_some());
+    next.last_category = last_category;
+
+    let export_log = parse_key::<Map<String, Value>>(d, "notionExportLog", "notionExportLog")?;
+    apply(export_log.is_some());
+    next.notion_export_log = export_log.unwrap_or_default();
+
+    if !applied {
+        return Err("备份文件里没有可恢复的数据".to_string());
+    }
+
+    let days = next.stats.len() as u32;
+    *data = next;
+    Ok(days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +391,90 @@ mod tests {
         ] {
             assert!(v.get(key).is_some(), "missing key {key}");
         }
+    }
+
+    fn v1_backup_sample() -> String {
+        r#"{
+          "schemaVersion": 1,
+          "exportedAt": "2026-07-01T10:00:00.000Z",
+          "appVersion": "1.9",
+          "data": {
+            "stats": { "2026-06-30": 5, "2026-07-01": { "completed": 3, "rotten": 1 } },
+            "tasksToday": { "date": "2026-07-01", "tasks": [
+              { "id": 1719800000000, "title": "旧任务", "planned": 4, "used": 2,
+                "done": false, "isCurrent": true, "category": "学习" } ] },
+            "tasksArchive": { "2026-06-30": [
+              { "id": "t_abc", "title": "归档任务", "planned": 1, "used": 1, "done": true } ] },
+            "badgesState": { "badges": 2, "unlockedDates": ["2026-05-01", "2026-06-15"],
+              "lastExtendDate": "2026-06-20", "anchorDate": "2026-04-01" },
+            "settings": { "lockscreenBg": "dawn", "chimeEnabled": false, "longBreakEvery": 6,
+              "theme": "monster" },
+            "lastTaskCategory": "学习",
+            "notionExportLog": { "2026-06-30": { "ok": true, "created": 1 } }
+          }
+        }"#
+        .to_string()
+    }
+
+    #[test]
+    fn import_v1_backup_maps_all_keys() {
+        let mut d = StoreData::default();
+        d.timer_state.state = TimerPhase::Focusing; // 备份范围外,应原样保留
+        d.quota_state.used = 2;
+        let days = import_backup(&mut d, &v1_backup_sample()).unwrap();
+        assert_eq!(days, 2);
+        assert_eq!(d.stats["2026-06-30"].completed, 5); // 旧数字格式归一化
+        assert_eq!(d.stats["2026-07-01"].rotten, 1);
+        assert_eq!(d.tasks_today.tasks[0].title, "旧任务");
+        assert_eq!(d.tasks_archive["2026-06-30"].len(), 1);
+        assert_eq!(d.badges_state.badges, 2);
+        assert!(!d.settings.chime_enabled);
+        assert_eq!(d.settings.long_break_every, 6);
+        // 浏览器特有项丢弃
+        assert!(!d.settings.extra.contains_key("lockscreenBg"));
+        // 旧键名 lastTaskCategory → lastCategory
+        assert_eq!(d.last_category.as_deref(), Some("学习"));
+        assert_eq!(d.notion_export_log["2026-06-30"]["created"], 1);
+        // 备份范围外零改动
+        assert_eq!(d.timer_state.state, TimerPhase::Focusing);
+        assert_eq!(d.quota_state.used, 2);
+    }
+
+    #[test]
+    fn import_rejects_bad_files_without_touching_data() {
+        let mut d = StoreData::default();
+        d.stats.entry("2026-07-17".into()).or_default().completed = 9;
+        let before = serde_json::to_string(&d).unwrap();
+
+        for (name, text) in [
+            ("损坏 JSON", "{not json"),
+            ("版本不对", r#"{"schemaVersion": 99, "data": {"stats": {}}}"#),
+            ("缺 data", r#"{"schemaVersion": 1}"#),
+            ("空 data", r#"{"schemaVersion": 1, "data": {}}"#),
+            ("stats 类型错", r#"{"schemaVersion": 1, "data": {"stats": "oops"}}"#),
+        ] {
+            let r = import_backup(&mut d, text);
+            assert!(r.is_err(), "{name} 应该被拒绝");
+            assert_eq!(serde_json::to_string(&d).unwrap(), before, "{name} 不得改动数据");
+        }
+    }
+
+    #[test]
+    fn backup_round_trip_v2() {
+        let mut d = StoreData::default();
+        import_backup(&mut d, &v1_backup_sample()).unwrap();
+        let exported = export_backup_json(&d, "0.1.0");
+        let mut d2 = StoreData::default();
+        let days = import_backup(&mut d2, &exported).unwrap();
+        assert_eq!(days, 2);
+        assert_eq!(
+            serde_json::to_value(&d.stats).unwrap(),
+            serde_json::to_value(&d2.stats).unwrap()
+        );
+        assert_eq!(d.last_category, d2.last_category);
+        assert_eq!(d.badges_state.badges, d2.badges_state.badges);
+        // 导出不包含 notionConfig(token 不外泄)
+        assert!(!exported.contains("notionConfig"));
     }
 
     #[test]

@@ -51,6 +51,7 @@
 
 | 能力 | 插件 | 说明 |
 |---|---|---|
+| 文件对话框 | `tauri-plugin-dialog` | 备份导出的保存路径选择(§4"保存对话框"的实现载体) |
 | 全局快捷键 | `tauri-plugin-global-shortcut` | 默认 `⌃⌥P` 开始 / 暂停;设置里可改可关;注册失败(冲突)时降级提示 |
 | 开机自启 | `tauri-plugin-autostart` | 设置里开关,默认关(首启引导询问) |
 | Notion API | `tauri-plugin-http` | scope 仅 `https://api.notion.com/*`;前端现有 fetch 导出代码近乎原样移植(换成 plugin-http 的 fetch),无 CORS |

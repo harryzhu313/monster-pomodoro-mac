@@ -115,7 +115,7 @@ fn with_store<T>(
 // —— commands(名字对齐 ARCHITECTURE §2 的指令清单)——
 
 #[tauri::command]
-fn get_state(app: AppHandle) -> timer::Snapshot {
+async fn get_state(app: AppHandle) -> timer::Snapshot {
     let state = app.state::<AppState>();
     let mut guard = state.store.lock().expect("store lock poisoned");
     let now = now_ms();
@@ -131,32 +131,32 @@ fn get_state(app: AppHandle) -> timer::Snapshot {
 }
 
 #[tauri::command]
-fn start(app: AppHandle) {
+async fn start(app: AppHandle) {
     with_store(&app, |d, now, _, dur| timer::start_focus(d, now, dur));
 }
 
 #[tauri::command]
-fn pause(app: AppHandle) {
+async fn pause(app: AppHandle) {
     with_store(&app, |d, now, _, _| timer::pause(d, now));
 }
 
 #[tauri::command]
-fn resume(app: AppHandle) {
+async fn resume(app: AppHandle) {
     with_store(&app, |d, now, _, _| timer::resume(d, now));
 }
 
 #[tauri::command]
-fn reset(app: AppHandle) {
+async fn reset(app: AppHandle) {
     with_store(&app, |d, _, _, _| timer::reset(d, false));
 }
 
 #[tauri::command]
-fn abandon(app: AppHandle) {
+async fn abandon(app: AppHandle) {
     with_store(&app, |d, now, today, _| timer::abandon(d, now, today));
 }
 
 #[tauri::command]
-fn overtime(app: AppHandle, ms: f64) -> timer::OvertimeOutcome {
+async fn overtime(app: AppHandle, ms: f64) -> timer::OvertimeOutcome {
     let outcome = with_store(&app, |d, now, today, _| {
         timer::claim_extra_time(d, ms as i64, now, today)
     });
@@ -173,7 +173,7 @@ fn overtime(app: AppHandle, ms: f64) -> timer::OvertimeOutcome {
 }
 
 #[tauri::command]
-fn update_settings(app: AppHandle, patch: serde_json::Value) {
+async fn update_settings(app: AppHandle, patch: serde_json::Value) {
     let (noise_on, breaking) = with_store(&app, |d, _, _, _| {
         timer::update_settings(d, patch);
         (
@@ -191,38 +191,121 @@ fn update_settings(app: AppHandle, patch: serde_json::Value) {
 }
 
 #[tauri::command]
-fn reset_quota(app: AppHandle) {
+async fn reset_quota(app: AppHandle) {
     with_store(&app, |d, _, today, _| timer::reset_quota(d, today));
 }
 
 // —— 任务(前端只发指令,数据变更与持久化全在 Rust)——
 
 #[tauri::command]
-fn add_task(app: AppHandle, title: String, category: Option<String>, planned: f64) {
+async fn add_task(app: AppHandle, title: String, category: Option<String>, planned: f64) {
     with_store(&app, |d, now, today, _| {
         timer::add_task(d, today, now, &title, category, planned)
     });
 }
 
 #[tauri::command]
-fn set_task_done(app: AppHandle, id: serde_json::Value, done: bool) {
+async fn set_task_done(app: AppHandle, id: serde_json::Value, done: bool) {
     with_store(&app, |d, _, today, _| timer::set_task_done(d, today, &id, done));
 }
 
 #[tauri::command]
-fn set_current_task(app: AppHandle, id: serde_json::Value) {
+async fn set_current_task(app: AppHandle, id: serde_json::Value) {
     with_store(&app, |d, _, today, _| timer::set_current_task(d, today, &id));
 }
 
 #[tauri::command]
-fn delete_task(app: AppHandle, id: serde_json::Value) {
+async fn delete_task(app: AppHandle, id: serde_json::Value) {
     with_store(&app, |d, _, today, _| timer::delete_task(d, today, &id));
+}
+
+// —— 备份导入导出 / Notion 配置 ——
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportOutcome {
+    ok: bool,
+    canceled: bool,
+    path: Option<String>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn export_backup(app: AppHandle) -> ExportOutcome {
+    use tauri_plugin_dialog::DialogExt;
+    let (json, file_name) = {
+        let state = app.state::<AppState>();
+        let guard = state.store.lock().expect("store lock poisoned");
+        (
+            store::export_backup_json(&guard.data, env!("CARGO_PKG_VERSION")),
+            format!("tomato-monster-backup-{}.json", timer::today_str()),
+        )
+    };
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_file_name(&file_name)
+        .add_filter("JSON", &["json"])
+        .blocking_save_file()
+    else {
+        return ExportOutcome { ok: false, canceled: true, path: None, error: None };
+    };
+    let Ok(path) = path.into_path() else {
+        return ExportOutcome {
+            ok: false, canceled: false, path: None,
+            error: Some("无效的保存路径".into()),
+        };
+    };
+    match std::fs::write(&path, json) {
+        Ok(()) => ExportOutcome {
+            ok: true, canceled: false,
+            path: Some(path.display().to_string()), error: None,
+        },
+        Err(e) => ExportOutcome {
+            ok: false, canceled: false, path: None, error: Some(e.to_string()),
+        },
+    }
+}
+
+#[tauri::command]
+async fn import_backup(app: AppHandle, json: String) -> store::ImportOutcome {
+    with_store(&app, |d, _, _, _| match store::import_backup(d, &json) {
+        Ok(days) => store::ImportOutcome { ok: true, error: None, days },
+        Err(e) => store::ImportOutcome { ok: false, error: Some(e), days: 0 },
+    })
+}
+
+#[tauri::command]
+async fn get_notion_config(app: AppHandle) -> store::NotionConfig {
+    let state = app.state::<AppState>();
+    let guard = state.store.lock().expect("store lock poisoned");
+    guard.data.notion_config.clone()
+}
+
+#[tauri::command]
+async fn set_notion_config(app: AppHandle, config: store::NotionConfig) {
+    with_store(&app, |d, _, _, _| d.notion_config = config);
+}
+
+/// 记一笔 Notion 导出历史(旧 notionExportLog 语义:prev[date] = {at, ...summary})
+#[tauri::command]
+async fn log_notion_export(app: AppHandle, date: String, summary: serde_json::Value) {
+    with_store(&app, |d, _, _, _| {
+        let mut entry = serde_json::Map::new();
+        entry.insert("at".into(), serde_json::Value::String(chrono::Local::now().to_rfc3339()));
+        if let serde_json::Value::Object(m) = summary {
+            for (k, v) in m {
+                entry.insert(k, v);
+            }
+        }
+        d.notion_export_log.insert(date, serde_json::Value::Object(entry));
+    });
 }
 
 // —— 统计与设置窗口 ——
 
 #[tauri::command]
-fn open_stats(app: AppHandle) {
+async fn open_stats(app: AppHandle) {
     if let Some(w) = app.get_webview_window("stats") {
         let _ = w.set_focus();
         return;
@@ -240,10 +323,11 @@ fn open_stats(app: AppHandle) {
     .build()
     {
         Ok(w) => {
+            // Sidebar 材质磨砂感强;UnderWindowBackground 太透,壁纸会穿透(用户反馈)
             #[cfg(target_os = "macos")]
             if let Err(e) = window_vibrancy::apply_vibrancy(
                 &w,
-                window_vibrancy::NSVisualEffectMaterial::UnderWindowBackground,
+                window_vibrancy::NSVisualEffectMaterial::Sidebar,
                 None,
                 None,
             ) {
@@ -255,7 +339,7 @@ fn open_stats(app: AppHandle) {
 }
 
 #[tauri::command]
-fn get_stats_bundle(app: AppHandle) -> timer::StatsBundle {
+async fn get_stats_bundle(app: AppHandle) -> timer::StatsBundle {
     let state = app.state::<AppState>();
     let mut guard = state.store.lock().expect("store lock poisoned");
     let today = timer::today_str();
@@ -264,12 +348,12 @@ fn get_stats_bundle(app: AppHandle) -> timer::StatsBundle {
 }
 
 #[tauri::command]
-fn clear_today_stats(app: AppHandle) {
+async fn clear_today_stats(app: AppHandle) {
     with_store(&app, |d, _, today, _| timer::clear_today_stats(d, today));
 }
 
 #[tauri::command]
-fn set_history_task_done(app: AppHandle, date: String, id: serde_json::Value, done: bool) {
+async fn set_history_task_done(app: AppHandle, date: String, id: serde_json::Value, done: bool) {
     with_store(&app, |d, _, today, _| {
         timer::set_history_task_done(d, today, &date, &id, done)
     });
@@ -313,6 +397,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_http::init())
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -460,7 +546,12 @@ pub fn run() {
             open_stats,
             get_stats_bundle,
             clear_today_stats,
-            set_history_task_done
+            set_history_task_done,
+            export_backup,
+            import_backup,
+            get_notion_config,
+            set_notion_config,
+            log_notion_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

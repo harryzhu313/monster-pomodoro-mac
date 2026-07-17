@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"panel / stats / celebration 窗口的基础 IPC 能力","local":true,"windows":["panel","stats","celebration"],"permissions":["core:default","positioner:default"]}}
+{"default":{"identifier":"default","description":"panel / stats / celebration 窗口的基础 IPC 能力","local":true,"windows":["panel","stats","celebration"],"permissions":["core:default","positioner:default","dialog:default",{"identifier":"http:default","allow":[{"url":"https://api.notion.com/*"}]}]}}
