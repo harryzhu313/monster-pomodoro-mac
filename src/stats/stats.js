@@ -950,9 +950,14 @@ els.btnNotionGoalTest.addEventListener('click', () => {
   runNotionConnectionTest(
     els.btnNotionGoalTest,
     els.notionGoalStatus,
-    '正在检查月度目标连接…',
+    '正在检查目标库、时间框架和当月页面…',
     ['token', 'goalDbId'],
-    notion.testGoalConnection
+    async (configSnapshot) => {
+      // 日期必须与未来同步 payload 同源：点击后取一次 Rust Snapshot 并冻结 today。
+      const stateSnapshot = (await invoke('get_state')) ?? snap ?? MOCK_SNAP;
+      const today = String(stateSnapshot?.today || '');
+      return notion.testGoalConnection(configSnapshot, today);
+    }
   );
 });
 

@@ -32,7 +32,7 @@ v2 已让月度目标、今日任务和实际番茄在本地形成闭环，但�
 | # | 阶段 slug | 一句话目标 | 状态 |
 |---|---|---|---|
 | 01 | notion-goal-config | 安全增加目标库配置与独立连接检查，不清空旧配置 | completed |
-| 02 | goal-sync-preflight | 只读验证完整 schema，并定位唯一的当前月页面 | not started |
+| 02 | goal-sync-preflight | 只读验证完整 schema，并定位唯一的当前月页面 | completed |
 | 03 | goal-sync-core | 用稳定复合键实现可测试、可重试的幂等 upsert 核心 | not started |
 | 04 | goal-sync-ui | 接入同步 UI，并在真实 Notion 中完成新增与更新闭环 | not started |
 | 05 | hardening-spec-release | 完成异常回归、spec 同步、全链路测试与发布构建 | not started |
@@ -58,7 +58,7 @@ v2 已让月度目标、今日任务和实际番茄在本地形成闭环，但�
 - [x] 月度记录粒度、字段映射、同步方向与当前月范围 —— 用户 2026-08-25 确认
 - [x] Relation 两侧数量限制与空白记录 —— 用户已在 Notion 调整并清理
 - [x] Notion 数据库 schema —— 已只读核对，六个目标属性和时间框架属性就位
-- [ ] App 当前使用的 Integration 是否同时具备两个数据库的读取与写入权限 —— Phase 02 验证读取，Phase 04 首次写入验证；Token 只在 App 本机填写
+- [ ] App 当前使用的 Integration 是否同时具备两个数据库的读取与写入权限 —— Phase 02 已验证两库读取；Phase 04 首次写入验证；Token 只在 App 本机填写
 
 ## 关联
 
