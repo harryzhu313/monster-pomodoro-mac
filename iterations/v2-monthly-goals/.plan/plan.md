@@ -33,7 +33,7 @@ v1 上线并日常使用两个月后暴露三个问题：跨天任务不自动�
 | 03 | goals-backend     | 月度目标 schema + commands + snapshot 字段（Rust 为唯一事实来源）| completed   |
 | 04 | goals-panel-ui    | 面板 chips 勾选加入今日任务 + 今日番茄数数字框可改              | completed   |
 | 05 | goals-settings-ui | 统计与设置窗口的「🎯 月度番茄目标」管理卡                        | completed   |
-| 06 | polish-spec-sync  | 全链路验收、spec 同步（DESIGN 宽度 / ARCHITECTURE schema）      | not started |
+| 06 | polish-spec-sync  | 全链路验收、spec 同步（DESIGN 宽度 / ARCHITECTURE schema）      | completed   |
 
 > 状态值：`not started` / `in progress` / `completed` / `blocked` / `skipped`
 >

@@ -16,7 +16,8 @@
 **Rust 是唯一事实来源;前端是纯视图。**
 
 - Rust 负责:状态机(`idle / focusing / breaking / paused`)、基于 `endTime` 时间戳的计时(不累加 tick,零漂移)、加时配额结算、连击 / 统计 / 徽章记账、每秒刷新托盘标题、触发系统通知与音频、持久化。
-- 前端负责:渲染与交互。通过 Tauri event 订阅 `state-update`(状态快照广播),通过 command 发指令(`start / pause / resume / reset / abandon / overtime / update_settings / import_backup / export_backup / notion_export`)。
+- 前端负责:渲染与交互。通过 Tauri event 订阅 `state-update`(状态快照广播),通过 command 发送用户意图(计时、任务、设置、备份、Notion 导出与月度目标)。
+- **v2 月度目标写操作**:`set_task_planned(id, planned)` 与 `add_goal / update_goal / delete_goal / toggle_goal_today`。它们全部走 `with_store`,由 Rust 统一完成夹紧/规则校验、持久化、`state-update` 广播与托盘刷新。`toggle_goal_today` 返回 `{ ok, reason, checked }`;已投入番茄时以 `locked` 拒绝取消,未知目标返回 `not-found`。
 - **为什么不把计时器留在 JS**:WKWebView 对隐藏窗口的 JS 定时器有节流,把计时器放前端会重蹈 Chrome MV3 Service Worker 被休眠的覆辙。托盘标题更新、休息提醒都必须在面板关闭时照常工作。
 - 旧 `background/service-worker.js`(1258 行)的状态机逻辑**按行为对齐移植**到 `timer.rs`,以旧代码为行为规范,包括防御性规则(break 阶段 skip 无效、配额日切重置、长休息每 N 个番茄触发等)。
 
@@ -25,7 +26,7 @@
 | 窗口 | 形态 | 实现要点 |
 |---|---|---|
 | 托盘 | 菜单栏图标 + `mm:ss` 标题 | Tauri `TrayIcon`,`iconAsTemplate: true`(单色模板剪影,三态);标题文字每秒由 Rust 更新,休息期间加红色提示符;右键原生菜单(统计与设置/退出),左键保持 toggle 面板 |
-| 主面板 | 300px 无边框弹出,失焦即隐 | 点托盘图标显示 / 隐藏;`tauri-plugin-positioner` 定位到托盘图标下方;**隐藏而非销毁**(保留 DOM 状态,秒开);**休息期钉住**:自动弹出、失焦不隐、托盘点击不收起、不抢键盘焦点(2026-07-17 替代系统通知的决策,通知插件已移除) |
+| 主面板 | 固定 360×700px 无边框弹出,失焦即隐 | 点托盘图标显示 / 隐藏;`tauri-plugin-positioner` 定位到托盘图标下方;**隐藏而非销毁**(保留 DOM 状态,秒开);内容超高时沿用纵向滚动,运行时不动态改窗口高度;**休息期钉住**:自动弹出、失焦不隐、托盘点击不收起、不抢键盘焦点(2026-07-17 替代系统通知的决策,通知插件已移除) |
 | 统计与设置 | 常规可调窗口(最小 560px) | 按需创建,关闭销毁 |
 | 庆祝弹层 | 全屏无边框透明,点击即关 | love monster 7 天连击奖励;临时窗口,展示完销毁 |
 
@@ -35,9 +36,10 @@
 
 - **位置**:`~/Library/Application Support/com.tomatomonster.app/store.json`(Tauri app data dir),Rust serde_json 读写。
 - **原子写**:先写临时文件再 rename,防崩溃损坏。
-- **Schema 顶层键沿用旧插件命名**:`timerState / quotaState / settings / stats / tasksToday / tasksArchive / badgesState / lastCategory / notionExportLog`。
-- **旧备份导入**:旧插件备份 JSON(`BACKUP_SCHEMA_VERSION: 1`,含 `stats / tasksToday / tasksArchive / badgesState / settings / lastCategory / notionExportLog` 七键)逐键映射导入,先整体校验后写入,**失败整体回滚**,不半截导入。settings 里浏览器特有项(如悬浮窗设置)导入时丢弃。
-- 导出备份保持同一 schema(版本号 +1,并保留对 v1 的读取兼容),路径由用户在保存对话框里选。
+- **Schema 顶层键**:旧插件键名保持不变,新能力只追加字段。当前固定键为 `timerState / quotaState / settings / stats / tasksToday / tasksArchive / badgesState / monthlyGoals / lastCategory / notionExportLog / notionConfig / onboardingDone`。未识别的顶层键、任务字段与月度目标字段继续透传,保持前向兼容。
+- **月度目标持久化**:`monthlyGoals` 是长期有效、不按月分桶的数组,每项定义字段为 `{ id, title, category, monthTarget }`;跨月保留条目,仅进度按自然月重新派生。`Task.goalId?: string` 只标记从目标勾选产生的任务,手动任务与旧任务不写该键。删除目标不级联删除已有任务,`goalId` 允许成为悬空引用。后加字段使用 serde 默认值:旧 store 缺 `monthlyGoals` 时按空数组加载,旧任务缺 `goalId` 时按 `None` 加载且回写不新增该键。
+- **月度目标视图契约**:`get_state` / `state-update` 的 `Snapshot` 和统计窗口的 `StatsBundle` 都返回 `monthlyGoals: GoalView[]`;每项包含 `id / title / category / monthTarget / monthDone / checkedToday / locked`。后三者不持久化:`monthDone` 是当前自然月 `tasksToday + tasksArchive` 中相同 `goalId` 任务的 `used` 之和,`checkedToday / locked` 从今日关联任务派生;前端不自行维护或推导。
+- **备份 schema**:当前导出 `schemaVersion: 3`,导入受理 `{1, 2, 3}`。v3 `data` 包含 `stats / tasksToday / tasksArchive / badgesState / monthlyGoals / settings / lastCategory / notionExportLog`;`goalId` 随任务对象自然进入备份。v1 的 `lastTaskCategory` 与 v2/v3 的 `lastCategory` 均可读;v1/v2 缺少 `monthlyGoals` 时按空数组恢复。`timerState / quotaState / notionConfig / onboardingDone` 不进备份,确保 token 不外泄。导入先在副本完成全部解析,全部成功后才一次替换;settings 中浏览器特有项丢弃。导出路径由用户在保存对话框里选择。
 
 ## 5. 音频
 

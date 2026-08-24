@@ -15,11 +15,15 @@ colors:
   on-neutral-muted: "#8a8a85"
   surface-card: "rgba(255,255,255,0.55)"
   border-hairline: "rgba(0,0,0,0.08)"
+  goal-chip-on-bg: "rgba(217,79,58,0.10)"
+  goal-chip-on-border: "rgba(217,79,58,0.45)"
   neutral-dark: "#1f1e1c"
   on-neutral-dark: "#e8e6e1"
   on-neutral-dark-muted: "#9a9892"
   surface-card-dark: "rgba(255,255,255,0.07)"
   border-hairline-dark: "rgba(255,255,255,0.10)"
+  goal-chip-on-bg-dark: "rgba(231,123,104,0.16)"
+  goal-chip-on-border-dark: "rgba(231,123,104,0.50)"
 
 typography:
   display:
@@ -102,6 +106,11 @@ components:
     textColor: "{colors.on-neutral-muted}"
     rounded: "{rounded.full}"
     typography: "{typography.caption}"
+  goal-chip-selected:
+    backgroundColor: "{colors.goal-chip-on-bg}"
+    textColor: "{colors.primary}"
+    rounded: "{rounded.full}"
+    typography: "{typography.caption}"
 ---
 
 ## Overview
@@ -119,6 +128,7 @@ components:
 - **Primary-soft (#e77b68):** 深色模式下的文字级番茄红强调(深底上直接用 #d94f3a 对比不足)。
 - **Success (#4a8a5c) / Warning (#b08a3e) / Error (#b0524a):** 状态三色继承旧版——绿=休息,琥珀=暂停,红字系=专注/放弃。
 - **Neutral 系:** 表面色全部半透明(surface-card),让窗口 vibrancy 透出来。浅色模式暖白基调(#f6f5f0 罩),深色模式暖黑(#1f1e1c 罩)。深浅两套 token 同构一一对应,切换只换值不换结构。
+- **Goal chip 选中态:** 从 primary 派生轻底与描边(`goal-chip-on-bg / goal-chip-on-border`),深色模式使用 primary-soft 的同构透明色;不做实色大块填充。
 
 ## Typography
 
@@ -126,8 +136,8 @@ components:
 
 ## Layout
 
-- **主面板:** 固定宽 300px,单列卡片流,从上到下:计时卡 → 今日收获 → 今日任务 → 底栏。
-- **统计与设置窗口:** 默认 680px,可调(最小 560px),卡片栅格排布,窄时单列。
+- **主面板:** 固定 360×700px,单列卡片流,从上到下:计时卡 → 今日收获 → 今日任务(月度目标 chips + 两行任务行) → 底栏。内容超高时纵向滚动,不在运行时动态拉伸窗口。
+- **统计与设置窗口:** 默认 680×760px,可调(最小 560×480px),单列卡片流。
 - **间距:** 4/8/12/16/24/32 六档;面板内以 sm/md 为主,窗口区块间用 lg/xl。
 
 ## Elevation & Depth
@@ -155,6 +165,9 @@ components:
 ### badge
 任务分类标签(工作/学习/生活/兴趣爱好)、配额指示(剩 N/3)。胶囊形,caption 字号。
 
+### goal-chip-selected
+月度目标勾选态。使用番茄红轻底 + 细描边 + 文字红强调,并显示 `✓`;未选中时回到中性表面,已投入锁定态保留勾选且不可点。
+
 ### 原生件(无 CSS token)
 - **菜单栏图标:** 单色模板剪影(template icon),idle/专注/休息三态用不同剪影;旁挂 mm:ss 倒计时文字,休息期间文字变红醒目。
 - **系统通知:** 原生样式,不定制。
@@ -165,7 +178,7 @@ components:
 - ✅ 只用系统字体;倒计时用 tabular-nums
 - ✅ 深浅双模式同步设计,所有颜色经 CSS 变量 token,禁止硬编码 hex 散落
 - ✅ 小怪兽是唯一插画元素,保留蜡笔毛绒质感(SVG turbulence + displacement filter)
-- ✅ 🍅/🥫/🔥 emoji 仅用于收获数据行(功能性数据可视化,继承旧版)
+- ✅ 🍅/🥫/🔥 emoji 用于收获数据行;统计窗口的非交互分区标题可沿用既有 emoji
 - ✅ 菜单栏图标用单色模板剪影,自动适配深浅菜单栏
 
 ### Don'ts
@@ -173,7 +186,7 @@ components:
 - ❌ 不要加载外部字体
 - ❌ 不要在毛玻璃上叠加重阴影(拟物堆叠)
 - ❌ 不要彩色菜单栏图标
-- ❌ 不要用 emoji 当功能图标(按钮、导航、设置项)
+- ❌ 不要用 emoji 当交互功能图标(按钮、导航或设置控件)
 - ❌ 不要超过 200ms 的阻塞式动画
 
 ---
@@ -191,7 +204,7 @@ components:
 
 ## Responsiveness
 
-非响应式网页场景:主面板固定 300px 不缩放;统计与设置窗口可调宽(最小 560px),内部卡片栅格自动换行;无移动端、无断点体系。
+非响应式网页场景:主面板固定 360×700px 不缩放;统计与设置窗口可调宽(最小 560px),内部始终保持单列卡片流;无移动端、无断点体系。
 
 ## Accessibility
 
