@@ -1,6 +1,6 @@
 # Phase 04 — 面板月度目标 chips 与今日番茄数
 
-**Status**: `in progress`（用户已验收，待提交）
+**Status**: `completed`
 **目标**: 面板上勾选 chip 即加入今日任务；今日番茄数可在任务行直接改
 **前置**: Phase 03（数据与 commands 就位）
 
@@ -17,35 +17,35 @@
 
 ### Section A — chips 行
 
-**Gate**: `user-approved`
+**Gate**: `committed`
 
 **自测判据**：勾选 / 取消 / 锁定三态实测；目标 0 个与 5 个时面板高度可接受
 
 **Tasks**：
 
-- [x] `panel.html` 「今日任务」卡顶部加 `.goal-strip` 结构
-- [x] `panel.css` chips 与进度条样式；勾选态颜色新增 `--goal-chip-on-bg` / `--goal-chip-on-border` 两个 token（深浅各一套），未硬编码 hex
-- [x] `panel.js` `renderGoals()` 差量重建（`lastGoalsJson`，避免每秒快照打断交互）+ 绑定 `toggle_goal_today`
-- [x] 锁定态 chip 设 `disabled` 且带解释性 title，不只是视觉变灰
-- [x] 月份文案取自快照的 `today`，不读本地时钟
-- [x] 「管理 ›」复用 `open_stats`
-- [x] 目标为空时 `.goal-strip` 整块隐藏
+- [x] `panel.html` 「今日任务」卡顶部加 `.goal-strip` 结构（commit bed76d0）
+- [x] `panel.css` chips 与进度条样式；勾选态颜色新增 `--goal-chip-on-bg` / `--goal-chip-on-border` 两个 token（深浅各一套），未硬编码 hex（commit bed76d0）
+- [x] `panel.js` `renderGoals()` 差量重建（`lastGoalsJson`，避免每秒快照打断交互）+ 绑定 `toggle_goal_today`（commit bed76d0）
+- [x] 锁定态 chip 设 `disabled` 且带解释性 title，不只是视觉变灰（commit bed76d0）
+- [x] 月份文案取自快照的 `today`，不读本地时钟（commit bed76d0）
+- [x] 「管理 ›」复用 `open_stats`（commit bed76d0）
+- [x] 目标为空时 `.goal-strip` 整块隐藏（commit bed76d0）
 
 ### Section B — 今日番茄数可改
 
-**Gate**: `user-approved`
+**Gate**: `committed`
 
 **自测判据**：敲数字 / 点上下箭头 / 敲小于已投入的数 三种操作行为正确
 
 **Tasks**：
 
-- [x] 任务行第二行加 `type=number` 数字框（沿用「添加」那行的视觉，自带上下箭头）
-- [x] `set_task_planned` command —— **已在 phase 03 前移完成**
-- [x] 提交时机：回车 / 失焦；聚焦全选；Esc 取消回弹
-- [x] `min` 跟随今天已投入数，已完成的任务输入框 `disabled`
-- [x] 计划数 > 8 时番茄图标改数值显示（`🍅 3/30`）
-- [x] **方案回退**：移除 `ResizeObserver → resize_panel` 动态调窗链路，主面板固定为 360×700px（`src-tauri/tauri.conf.json:17-18`；验证命令：`rg -n 'resize_panel|ResizeObserver|syncPanelHeight' src src-tauri/src` 无匹配）
-- [x] **修掉一个实测发现的 bug**：清空输入框时 `Number('')` === 0 是合法有限数，会把 `planned: 0` 发给后端；改为空串 / < 1 / 非数字一律回弹，不劳烦后端
+- [x] 任务行第二行加 `type=number` 数字框（沿用「添加」那行的视觉，自带上下箭头）（commit bed76d0）
+- [x] `set_task_planned` command —— **已在 phase 03 前移完成**（commit 9d9d3f9）
+- [x] 提交时机：回车 / 失焦；聚焦全选；Esc 取消回弹（commit bed76d0）
+- [x] `min` 跟随今天已投入数，已完成的任务输入框 `disabled`（commit bed76d0）
+- [x] 计划数 > 8 时番茄图标改数值显示（`🍅 3/30`）（commit bed76d0）
+- [x] **方案回退**：移除 `ResizeObserver → resize_panel` 动态调窗链路，主面板固定为 360×700px（`src-tauri/tauri.conf.json:17-18`；验证命令：`rg -n 'resize_panel|ResizeObserver|syncPanelHeight' src src-tauri/src` 无匹配；commit bed76d0）
+- [x] **修掉一个实测发现的 bug**：清空输入框时 `Number('')` === 0 是合法有限数，会把 `planned: 0` 发给后端；改为空串 / < 1 / 非数字一律回弹，不劳烦后端（commit bed76d0）
 
 **记录**：
 
@@ -57,13 +57,13 @@
   - 360px 下零横向溢出；3 个目标 chips 折两行
   - 固定 700px 方案回退：JavaScript module 语法与 Tauri JSON 校验通过；`cargo check` 通过；`cargo test` 40 项全绿；开发版重新启动供用户真机验收
 - 用户验收：2026-08-24，主面板固定 360×700px 的真机高度通过（用户反馈：“高度可以”）；随后用户确认 Phase 04 整体验收，Section A / B 均通过
-- Commit：
+- Commit：bed76d0
 
 ---
 
 ## Notes
 
-- 前端零计算：chip 的进度、锁定态全部读快照字段，不在 JS 里算（AGENTS 规则 6）。
+- 前端不推导业务状态：单个 chip 的进度与锁定态全部读快照；JS 只汇总快照字段计算合计进度条，不写回状态（AGENTS 规则 6）。
 - `set_task_planned` 的下限夹紧必须在 Rust 侧做，前端的限制只是体验优化。
 
 ### ⚠️ 实测发现:面板内容高度早已超过窗口高度(非本 phase 引入)

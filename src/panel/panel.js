@@ -322,12 +322,6 @@ function renderTaskTomatoes(task) {
     s.textContent = '🍅';
     wrap.appendChild(s);
   }
-  if (task.planned > MAX_TOMATO_ICONS) {
-    const more = document.createElement('span');
-    more.className = 'tomato overflow';
-    more.textContent = `+${task.planned - MAX_TOMATO_ICONS}`;
-    wrap.appendChild(more);
-  }
   if (task.used > task.planned) {
     const over = document.createElement('span');
     over.className = 'tomato overflow';
