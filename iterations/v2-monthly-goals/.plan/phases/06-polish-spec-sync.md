@@ -17,7 +17,7 @@
 
 ### Section A — 验收与文档同步
 
-**Gate**: `user-approved`
+**Gate**: `committed`
 
 **Tasks**：
 
@@ -39,7 +39,7 @@
   - release `.app` 与 arm64 DMG 生成成功；`hdiutil verify` 为 VALID，SHA-256：`68e96fcdce25404580924edd1d612fe90bf6bb23bb15039b1c123aced7d0996d`
   - ARCHITECTURE / DESIGN / PRD 分别经过独立只读复查，无阻断问题；复查建议已回填
 - 用户验收：2026-08-24 通过。用户在全新隔离实例中逐步确认目标新增、chip 入今日、计划数修改、专注结算、`1/3` 锁定、休息切轮与删除保留任务；Phase 01 / 02 / 04 / 05 亦已分别验收通过
-- Commit：待 Phase 06 验收通过后提交
+- Commit：`89d26eb` (`Phase 06: 完成全链路验收与 spec 同步`)
 
 ---
 
