@@ -150,6 +150,10 @@ pub struct Task {
     /// 手动勾选/取消完成的覆盖标记(旧 popup.js toggleTaskDone 行为,历史明细展示用)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_override: Option<bool>,
+    /// 由哪个月度目标勾选产生(v2);手动添加的任务为 None。
+    /// 用途:chip 勾选态回显、本月进度统计、已投入锁定判断
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -159,6 +163,24 @@ pub struct Task {
 pub struct TasksToday {
     pub date: String,
     pub tasks: Vec<Task>,
+}
+
+// —— monthlyGoals(v2:月度目标)——
+// 不按月分桶:目标永不自动重置,一份列表长期有效(用户 2026-08-24 拍板)。
+// month_target 是"本月总量",本月进度由 tasksToday + tasksArchive 里
+// goalId 匹配的任务的 used 累加得出,不单独存,避免两份数据对不上。
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MonthlyGoal {
+    pub id: String,
+    pub title: String,
+    /// 复用任务分类四常量(产品红线 2:不得新增或改名)
+    pub category: Option<String>,
+    /// 本月想做多少个番茄
+    pub month_target: u32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 // —— badgesState(连击 / 徽章)——
@@ -194,6 +216,7 @@ pub struct StoreData {
     pub tasks_today: TasksToday,
     pub tasks_archive: BTreeMap<String, Vec<Task>>,
     pub badges_state: BadgesState,
+    pub monthly_goals: Vec<MonthlyGoal>,
     pub last_category: Option<String>,
     pub notion_export_log: Map<String, Value>,
     pub notion_config: NotionConfig,
@@ -253,7 +276,9 @@ impl Store {
 // 新版导出 v2:结构相同,键名 lastCategory;导入兼容 v1/v2。
 // timerState / quotaState / notionConfig 不在备份范围(旧行为一致;token 不外泄)。
 
-pub const BACKUP_SCHEMA_VERSION: u64 = 2;
+/// v3 起备份包含 monthlyGoals;导入仍接受 v1/v2(缺该键时目标回默认空)
+pub const BACKUP_SCHEMA_VERSION: u64 = 3;
+const SUPPORTED_BACKUP_VERSIONS: [u64; 3] = [1, 2, BACKUP_SCHEMA_VERSION];
 
 /// settings 里浏览器特有项,导入时丢弃(ARCHITECTURE §4)
 const BROWSER_ONLY_SETTINGS: [&str; 1] = ["lockscreenBg"];
@@ -277,6 +302,7 @@ pub fn export_backup_json(data: &StoreData, app_version: &str) -> String {
             "tasksToday": data.tasks_today,
             "tasksArchive": data.tasks_archive,
             "badgesState": data.badges_state,
+            "monthlyGoals": data.monthly_goals,
             "settings": data.settings,
             "lastCategory": data.last_category,
             "notionExportLog": data.notion_export_log,
@@ -294,7 +320,7 @@ pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
         serde_json::from_str(text).map_err(|_| "备份文件不是有效的 JSON".to_string())?;
     let obj = payload.as_object().ok_or("备份文件不是有效的 JSON 对象")?;
     let version = obj.get("schemaVersion").and_then(Value::as_u64).unwrap_or(0);
-    if version != 1 && version != BACKUP_SCHEMA_VERSION {
+    if !SUPPORTED_BACKUP_VERSIONS.contains(&version) {
         return Err(format!("不支持的备份版本:{version}"));
     }
     let d = obj
@@ -337,6 +363,11 @@ pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
     let badges = parse_key::<BadgesState>(d, "badgesState", "badgesState")?;
     apply(badges.is_some());
     next.badges_state = badges.unwrap_or_default();
+
+    // v1/v2 备份没有这个键 → 回默认空,与其它键的整体覆盖语义一致
+    let goals = parse_key::<Vec<MonthlyGoal>>(d, "monthlyGoals", "monthlyGoals")?;
+    apply(goals.is_some());
+    next.monthly_goals = goals.unwrap_or_default();
 
     // settings:先剔除浏览器特有键再解析
     match d.get("settings") {
@@ -484,6 +515,69 @@ mod tests {
         assert_eq!(d.badges_state.badges, d2.badges_state.badges);
         // 导出不包含 notionConfig(token 不外泄)
         assert!(!exported.contains("notionConfig"));
+    }
+
+    /// 备份版本升到 3 之后,v1/v2 的老备份仍必须能导入(加键是向后兼容的)
+    #[test]
+    fn import_still_accepts_v1_and_v2_backups() {
+        let mut d = StoreData::default();
+        d.monthly_goals.push(MonthlyGoal {
+            id: "g1".into(),
+            title: "内参阅读".into(),
+            category: Some("学习".into()),
+            month_target: 30,
+            ..Default::default()
+        });
+
+        // v1 备份没有 monthlyGoals → 与其它键一致,整体覆盖为默认空
+        import_backup(&mut d, &v1_backup_sample()).unwrap();
+        assert!(d.monthly_goals.is_empty());
+
+        // v2 备份同样被接受
+        let v2 = v1_backup_sample().replace(r#""schemaVersion": 1"#, r#""schemaVersion": 2"#);
+        assert!(import_backup(&mut d, &v2).is_ok());
+
+        // 未来版本仍然拒绝
+        assert!(import_backup(&mut d, r#"{"schemaVersion": 99, "data": {"stats": {}}}"#).is_err());
+    }
+
+    #[test]
+    fn backup_round_trip_carries_monthly_goals() {
+        let mut d = StoreData::default();
+        d.monthly_goals.push(MonthlyGoal {
+            id: "g1".into(),
+            title: "内驱式学习".into(),
+            category: Some("学习".into()),
+            month_target: 40,
+            ..Default::default()
+        });
+        d.stats.entry("2026-08-24".into()).or_default().completed = 3;
+
+        let exported = export_backup_json(&d, "0.2.0");
+        assert!(exported.contains("monthlyGoals"));
+        assert!(exported.contains(r#""schemaVersion": 3"#));
+
+        let mut d2 = StoreData::default();
+        import_backup(&mut d2, &exported).unwrap();
+        assert_eq!(d2.monthly_goals.len(), 1);
+        assert_eq!(d2.monthly_goals[0].title, "内驱式学习");
+        assert_eq!(d2.monthly_goals[0].month_target, 40);
+    }
+
+    /// Task.goalId 是后加字段:旧任务没有它,读写都不能出问题,
+    /// 且不得给旧数据凭空塞一个 null 键
+    #[test]
+    fn task_goal_id_is_optional_and_omitted_when_absent() {
+        let legacy = r#"{"id": 1, "title": "旧任务", "planned": 2, "used": 1}"#;
+        let t: Task = serde_json::from_str(legacy).unwrap();
+        assert!(t.goal_id.is_none());
+        let back = serde_json::to_value(&t).unwrap();
+        assert!(back.get("goalId").is_none(), "旧任务不应凭空多出 goalId 键");
+
+        let with_goal = r#"{"id": 2, "title": "内参阅读", "goalId": "g1"}"#;
+        let t2: Task = serde_json::from_str(with_goal).unwrap();
+        assert_eq!(t2.goal_id.as_deref(), Some("g1"));
+        assert_eq!(serde_json::to_value(&t2).unwrap()["goalId"], "g1");
     }
 
     #[test]

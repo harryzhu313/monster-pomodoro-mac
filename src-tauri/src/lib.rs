@@ -260,6 +260,40 @@ async fn delete_task(app: AppHandle, id: serde_json::Value) {
     with_store(&app, |d, _, today, _| timer::delete_task(d, today, &id));
 }
 
+/// 改今天这条任务的计划番茄数;下限夹紧在 Rust 侧,前端的 min 只是体验优化
+#[tauri::command]
+async fn set_task_planned(app: AppHandle, id: serde_json::Value, planned: f64) {
+    with_store(&app, |d, _, today, _| timer::set_task_planned(d, today, &id, planned));
+}
+
+// —— 月度目标(v2)——
+
+#[tauri::command]
+async fn add_goal(app: AppHandle, title: String, category: Option<String>, month_target: f64) {
+    with_store(&app, |d, now, _, _| timer::add_goal(d, now, &title, category, month_target));
+}
+
+#[tauri::command]
+async fn update_goal(
+    app: AppHandle,
+    id: String,
+    title: Option<String>,
+    category: Option<String>,
+    month_target: Option<f64>,
+) {
+    with_store(&app, |d, _, _, _| timer::update_goal(d, &id, title, category, month_target));
+}
+
+#[tauri::command]
+async fn delete_goal(app: AppHandle, id: String) {
+    with_store(&app, |d, _, _, _| timer::delete_goal(d, &id));
+}
+
+#[tauri::command]
+async fn toggle_goal_today(app: AppHandle, id: String) -> timer::GoalToggleOutcome {
+    with_store(&app, |d, now, today, _| timer::toggle_goal_today(d, today, now, &id))
+}
+
 // —— 备份导入导出 / Notion 配置 ——
 
 #[derive(serde::Serialize)]
@@ -794,6 +828,11 @@ pub fn run() {
             set_task_done,
             set_current_task,
             delete_task,
+            set_task_planned,
+            add_goal,
+            update_goal,
+            delete_goal,
+            toggle_goal_today,
             open_stats,
             get_stats_bundle,
             clear_today_stats,

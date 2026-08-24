@@ -521,6 +521,182 @@ pub fn add_task(
     data.last_category = Some(category);
 }
 
+/// 改今天这条任务的计划番茄数(v2)。夹紧到 [max(1, used), 99]:
+/// 已经做了 3 个就不能改到 2,否则历史记录对不上。
+pub fn set_task_planned(data: &mut StoreData, today: &str, id: &Value, planned: f64) {
+    roll_over_tasks_if_needed(data, today);
+    for t in &mut data.tasks_today.tasks {
+        if task_id_eq(&t.id, id) {
+            let n = if planned.is_finite() { planned.floor() as i64 } else { 1 };
+            t.planned = n.clamp(t.used.max(1) as i64, 99) as u32;
+            return;
+        }
+    }
+}
+
+// —— 月度目标(v2)——
+// 目标本身长期有效,不按月分桶;"本月进度"是算出来的,不落库。
+
+fn month_prefix(today: &str) -> &str {
+    // "2026-08-24" → "2026-08";日期串格式由 today_str 保证
+    if today.len() >= 7 { &today[..7] } else { today }
+}
+
+/// 本月已投入番茄数 = 今日任务 + 归档里本月范围内、goalId 匹配的任务的 used 之和
+fn goal_month_done(data: &StoreData, today: &str, goal_id: &str) -> u32 {
+    let m = month_prefix(today);
+    let matches = |t: &Task| t.goal_id.as_deref() == Some(goal_id);
+    let mut sum = 0u32;
+    if data.tasks_today.date.starts_with(m) {
+        sum += data.tasks_today.tasks.iter().filter(|t| matches(t)).map(|t| t.used).sum::<u32>();
+    }
+    for (date, tasks) in &data.tasks_archive {
+        if date.starts_with(m) {
+            sum += tasks.iter().filter(|t| matches(t)).map(|t| t.used).sum::<u32>();
+        }
+    }
+    sum
+}
+
+/// 今天由该目标产生的任务(至多一条)
+fn goal_task_today<'a>(data: &'a StoreData, goal_id: &str) -> Option<&'a Task> {
+    data.tasks_today.tasks.iter().find(|t| t.goal_id.as_deref() == Some(goal_id))
+}
+
+pub fn add_goal(data: &mut StoreData, now: i64, title: &str, category: Option<String>, month_target: f64) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    let month_target =
+        if month_target.is_finite() { month_target.floor() as i64 } else { 1 }.clamp(1, 999) as u32;
+    let id = format!("g_{:x}_{:04x}", now, (now as u64).wrapping_mul(2_654_435_761) & 0xffff);
+    data.monthly_goals.push(crate::store::MonthlyGoal {
+        id,
+        title: title.to_string(),
+        category: Some(normalize_category(category)),
+        month_target,
+        ..Default::default()
+    });
+}
+
+/// 只更新传入的字段(None = 不动)
+pub fn update_goal(
+    data: &mut StoreData,
+    id: &str,
+    title: Option<String>,
+    category: Option<String>,
+    month_target: Option<f64>,
+) {
+    let Some(g) = data.monthly_goals.iter_mut().find(|g| g.id == id) else { return };
+    if let Some(t) = title {
+        let t = t.trim().to_string();
+        if !t.is_empty() {
+            g.title = t;
+        }
+    }
+    if let Some(c) = category {
+        g.category = Some(normalize_category(Some(c)));
+    }
+    if let Some(n) = month_target {
+        let n = if n.is_finite() { n.floor() as i64 } else { 1 };
+        g.month_target = n.clamp(1, 999) as u32;
+    }
+    // 目标改名后,今天那条由它产生的任务跟着改,避免面板上两处名字对不上
+    let (title, category) = (g.title.clone(), g.category.clone());
+    let gid = id.to_string();
+    for t in &mut data.tasks_today.tasks {
+        if t.goal_id.as_deref() == Some(gid.as_str()) {
+            t.title = title.clone();
+            t.category = category.clone();
+        }
+    }
+}
+
+/// 删除目标。已经产生的任务(今日与历史)一律保留——删目标不该抹掉已有记录,
+/// 它们的 goalId 变成悬空引用,只影响本月进度不再计入,不影响任务本身。
+pub fn delete_goal(data: &mut StoreData, id: &str) {
+    data.monthly_goals.retain(|g| g.id != id);
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalToggleOutcome {
+    pub ok: bool,
+    /// null | "locked"(今天已投入番茄,不可取消) | "not-found"
+    pub reason: Option<String>,
+    pub checked: bool,
+}
+
+/// 勾选 = 按目标预设建今日任务(番茄数默认 1);取消 = 删掉那条任务。
+/// 今天已投入番茄的目标拒绝取消,否则会连带抹掉已有的番茄记录。
+pub fn toggle_goal_today(data: &mut StoreData, today: &str, now: i64, id: &str) -> GoalToggleOutcome {
+    roll_over_tasks_if_needed(data, today);
+    let Some(goal) = data.monthly_goals.iter().find(|g| g.id == id).cloned() else {
+        return GoalToggleOutcome { ok: false, reason: Some("not-found".into()), checked: false };
+    };
+
+    match goal_task_today(data, id) {
+        Some(t) => {
+            if t.used > 0 {
+                return GoalToggleOutcome {
+                    ok: false,
+                    reason: Some("locked".into()),
+                    checked: true,
+                };
+            }
+            let tid = t.id.clone();
+            delete_task(data, today, &tid);
+            GoalToggleOutcome { ok: true, reason: None, checked: false }
+        }
+        None => {
+            let is_current = data.tasks_today.tasks.iter().all(|t| !t.is_current || t.done);
+            let tid = format!("t_{:x}_{:04x}", now, (now as u64).wrapping_mul(2_654_435_761) & 0xffff);
+            data.tasks_today.tasks.push(Task {
+                id: Value::String(tid),
+                title: goal.title.clone(),
+                planned: 1, // 今天做几个在面板上敲,预设只决定名称与分类
+                is_current,
+                category: goal.category.clone(),
+                goal_id: Some(goal.id.clone()),
+                ..Task::default()
+            });
+            GoalToggleOutcome { ok: true, reason: None, checked: true }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalView {
+    pub id: String,
+    pub title: String,
+    pub category: String,
+    pub month_target: u32,
+    pub month_done: u32,
+    pub checked_today: bool,
+    /// 今天已投入番茄 → chip 不可取消勾选
+    pub locked: bool,
+}
+
+pub fn goal_views(data: &StoreData, today: &str) -> Vec<GoalView> {
+    data.monthly_goals
+        .iter()
+        .map(|g| {
+            let t = goal_task_today(data, &g.id);
+            GoalView {
+                id: g.id.clone(),
+                title: g.title.clone(),
+                category: normalize_category(g.category.clone()),
+                month_target: g.month_target,
+                month_done: goal_month_done(data, today, &g.id),
+                checked_today: t.is_some(),
+                locked: t.map(|t| t.used > 0).unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
 pub fn set_task_done(data: &mut StoreData, today: &str, id: &Value, done: bool) {
     roll_over_tasks_if_needed(data, today);
     for t in &mut data.tasks_today.tasks {
@@ -565,6 +741,7 @@ pub struct StatsBundle {
     pub tasks_today: crate::store::TasksToday,
     pub badges: BadgesFull,
     pub notion_export_log: serde_json::Map<String, Value>,
+    pub monthly_goals: Vec<GoalView>,
     pub today: String,
 }
 
@@ -581,6 +758,7 @@ pub fn stats_bundle(data: &StoreData, today: &str) -> StatsBundle {
             unlocked_dates: data.badges_state.unlocked_dates.clone(),
         },
         notion_export_log: data.notion_export_log.clone(),
+        monthly_goals: goal_views(data, today),
         today: today.to_string(),
     }
 }
@@ -669,6 +847,7 @@ pub struct Snapshot {
     pub today_stats: crate::store::StatEntry,
     pub badges: BadgesView,
     pub tasks_today: crate::store::TasksToday,
+    pub monthly_goals: Vec<GoalView>,
     pub last_7_days: Vec<DayStat>,
     pub last_category: Option<String>,
     pub onboarding_done: bool,
@@ -685,6 +864,7 @@ pub fn snapshot(data: &StoreData, now: i64, today: &str, dur: &Durations) -> Sna
         today_stats: data.stats.get(today).copied().unwrap_or_default(),
         badges: get_badges_view(data, today),
         tasks_today: data.tasks_today.clone(),
+        monthly_goals: goal_views(data, today),
         last_7_days: last_7_days(data, today),
         last_category: data.last_category.clone(),
         onboarding_done: data.onboarding_done,
@@ -953,6 +1133,160 @@ mod tests {
         assert_eq!(d.tasks_today.date, T);
         assert!(d.tasks_archive.is_empty(), "空任务不该产生归档条目");
         assert!(!roll_over_tasks_if_needed(&mut d, T));
+    }
+
+    // —— 月度目标(v2 phase 03)——
+
+    fn data_with_goal() -> StoreData {
+        let mut d = StoreData::default();
+        d.tasks_today.date = T.into();
+        add_goal(&mut d, 1000, "内参阅读", Some("学习".into()), 30.0);
+        d
+    }
+
+    fn goal_id(d: &StoreData) -> String {
+        d.monthly_goals[0].id.clone()
+    }
+
+    #[test]
+    fn add_goal_normalizes_and_clamps() {
+        let mut d = StoreData::default();
+        add_goal(&mut d, 1000, "  ", Some("学习".into()), 30.0); // 空标题拒绝
+        assert!(d.monthly_goals.is_empty());
+
+        add_goal(&mut d, 1000, " 内参阅读 ", Some("不存在的分类".into()), f64::NAN);
+        let g = &d.monthly_goals[0];
+        assert_eq!(g.title, "内参阅读"); // trim
+        assert_eq!(g.category.as_deref(), Some("工作")); // 非法分类归一化到默认
+        assert_eq!(g.month_target, 1); // NaN → 1
+
+        add_goal(&mut d, 2000, "内驱式学习", Some("学习".into()), 9999.0);
+        assert_eq!(d.monthly_goals[1].month_target, 999); // clamp 上限
+    }
+
+    #[test]
+    fn toggle_goal_creates_task_from_preset() {
+        let mut d = data_with_goal();
+        let id = goal_id(&d);
+
+        let out = toggle_goal_today(&mut d, T, 5000, &id);
+        assert!(out.ok && out.checked);
+        let t = &d.tasks_today.tasks[0];
+        assert_eq!(t.title, "内参阅读");
+        assert_eq!(t.category.as_deref(), Some("学习")); // 分类来自目标预设
+        assert_eq!(t.planned, 1); // 今天做几个在面板上敲,预设不决定
+        assert_eq!(t.goal_id.as_deref(), Some(id.as_str()));
+        assert!(t.is_current); // 没有其它当前任务时自动成为当前
+
+        // 再点一次 = 取消,任务被删掉
+        let out = toggle_goal_today(&mut d, T, 6000, &id);
+        assert!(out.ok && !out.checked);
+        assert!(d.tasks_today.tasks.is_empty());
+    }
+
+    #[test]
+    fn toggle_goal_locked_after_first_tomato() {
+        let mut d = data_with_goal();
+        let id = goal_id(&d);
+        toggle_goal_today(&mut d, T, 5000, &id);
+        d.tasks_today.tasks[0].used = 1; // 已投入一个番茄
+
+        let out = toggle_goal_today(&mut d, T, 6000, &id);
+        assert!(!out.ok);
+        assert_eq!(out.reason.as_deref(), Some("locked"));
+        assert!(out.checked);
+        assert_eq!(d.tasks_today.tasks.len(), 1, "拒绝取消时任务不得被删");
+    }
+
+    #[test]
+    fn toggle_unknown_goal_is_noop() {
+        let mut d = data_with_goal();
+        let out = toggle_goal_today(&mut d, T, 5000, "g_nonexistent");
+        assert!(!out.ok);
+        assert_eq!(out.reason.as_deref(), Some("not-found"));
+        assert!(d.tasks_today.tasks.is_empty());
+    }
+
+    #[test]
+    fn goal_month_progress_counts_only_current_month() {
+        let mut d = data_with_goal();
+        let id = goal_id(&d);
+        toggle_goal_today(&mut d, T, 5000, &id);
+        d.tasks_today.tasks[0].used = 2; // 今天 2 个
+
+        // 本月早些时候归档的 3 个
+        d.tasks_archive.insert(
+            "2026-07-02".into(),
+            vec![Task { id: Value::from(9), goal_id: Some(id.clone()), used: 3, ..Task::default() }],
+        );
+        // 上个月的 7 个,不该计入
+        d.tasks_archive.insert(
+            "2026-06-20".into(),
+            vec![Task { id: Value::from(8), goal_id: Some(id.clone()), used: 7, ..Task::default() }],
+        );
+        // 本月但属于别的目标,不该计入
+        d.tasks_archive.insert(
+            "2026-07-03".into(),
+            vec![Task { id: Value::from(7), goal_id: Some("g_other".into()), used: 5, ..Task::default() }],
+        );
+
+        let v = &goal_views(&d, T)[0];
+        assert_eq!(v.month_done, 5); // 2 + 3
+        assert_eq!(v.month_target, 30);
+        assert!(v.checked_today);
+        assert!(v.locked); // used > 0
+    }
+
+    #[test]
+    fn update_goal_renames_todays_task_too() {
+        let mut d = data_with_goal();
+        let id = goal_id(&d);
+        toggle_goal_today(&mut d, T, 5000, &id);
+
+        update_goal(&mut d, &id, Some("内参精读".into()), Some("工作".into()), Some(50.0));
+        assert_eq!(d.monthly_goals[0].title, "内参精读");
+        assert_eq!(d.monthly_goals[0].month_target, 50);
+        // 面板上两处名字必须一致
+        assert_eq!(d.tasks_today.tasks[0].title, "内参精读");
+        assert_eq!(d.tasks_today.tasks[0].category.as_deref(), Some("工作"));
+
+        // None 表示不动
+        update_goal(&mut d, &id, None, None, None);
+        assert_eq!(d.monthly_goals[0].title, "内参精读");
+        assert_eq!(d.monthly_goals[0].month_target, 50);
+    }
+
+    #[test]
+    fn delete_goal_keeps_existing_records() {
+        let mut d = data_with_goal();
+        let id = goal_id(&d);
+        toggle_goal_today(&mut d, T, 5000, &id);
+        d.tasks_today.tasks[0].used = 2;
+
+        delete_goal(&mut d, &id);
+        assert!(d.monthly_goals.is_empty());
+        // 删目标不抹已有记录
+        assert_eq!(d.tasks_today.tasks.len(), 1);
+        assert_eq!(d.tasks_today.tasks[0].used, 2);
+    }
+
+    #[test]
+    fn set_task_planned_clamps_to_used() {
+        let mut d = data_with_task(); // planned 4, used 0
+        let id = d.tasks_today.tasks[0].id.clone();
+
+        set_task_planned(&mut d, T, &id, 8.0);
+        assert_eq!(d.tasks_today.tasks[0].planned, 8);
+
+        d.tasks_today.tasks[0].used = 3;
+        set_task_planned(&mut d, T, &id, 2.0); // 想减到 2,但已做 3
+        assert_eq!(d.tasks_today.tasks[0].planned, 3, "不得小于已投入数");
+
+        set_task_planned(&mut d, T, &id, 500.0);
+        assert_eq!(d.tasks_today.tasks[0].planned, 99); // clamp 上限
+
+        set_task_planned(&mut d, T, &id, f64::NAN);
+        assert_eq!(d.tasks_today.tasks[0].planned, 3); // NaN → 回下限
     }
 
     #[test]
