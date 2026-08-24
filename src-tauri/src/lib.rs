@@ -537,9 +537,15 @@ fn show_panel(app: &AppHandle, focus: bool) {
 /// 只广播不落盘:窗口从隐藏转可见时刷新其显示
 fn emit_fresh_snapshot(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let guard = state.store.lock().expect("store lock poisoned");
+    let mut guard = state.store.lock().expect("store lock poisoned");
     let now = now_ms();
     let today = timer::today_str();
+    // 面板隐藏期间可能已跨天:显示前先归档,不让昨天的任务闪出来
+    if timer::roll_over_tasks_if_needed(&mut guard.data, &today) {
+        if let Err(e) = guard.save() {
+            eprintln!("store: 保存失败 {e}");
+        }
+    }
     let snap = timer::snapshot(&guard.data, now, &today, &state.durations);
     let _ = app.emit("state-update", &snap);
 }
@@ -711,9 +717,16 @@ pub fn run() {
                                 &guard.data, now, &state.durations, &mut fired,
                             ));
                         }
+                        // 跨天归档:放在结算之后(与 get_state 同序,跨零点的专注先记到
+                        // 昨天的任务上再归档);日期没变时是一次字符串比较,零开销
+                        let rolled = timer::roll_over_tasks_if_needed(&mut guard.data, &today);
                         let active = guard.data.timer_state.state != store::TimerPhase::Idle;
                         if !effects.is_empty() {
                             run_effects(&handle, &guard.data.settings.clone(), &effects);
+                            sync_out(&handle, &guard, &state.durations);
+                        } else if rolled {
+                            // 归档已经改了数据,必须落盘并广播——否则面板一直显示昨天的任务
+                            // (v1 的 bug:tick 不做日切,只有打开统计窗口才顺带切一次)
                             sync_out(&handle, &guard, &state.durations);
                         } else if active || was_active {
                             // 托盘标题每秒都刷;快照只在有窗口在看时广播(CPU 预算 §9)

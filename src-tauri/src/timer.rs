@@ -159,9 +159,10 @@ fn get_today_completed(data: &StoreData, today: &str) -> u32 {
 
 // —— 任务跨天归档(sw.js:713-738)——
 
-pub fn roll_over_tasks_if_needed(data: &mut StoreData, today: &str) {
+/// 返回是否真的发生了归档(日期变了)——调用方据此决定要不要落盘 + 广播
+pub fn roll_over_tasks_if_needed(data: &mut StoreData, today: &str) -> bool {
     if data.tasks_today.date == today {
-        return;
+        return false;
     }
     let old_date = std::mem::take(&mut data.tasks_today.date);
     let old_tasks = std::mem::take(&mut data.tasks_today.tasks);
@@ -177,6 +178,7 @@ pub fn roll_over_tasks_if_needed(data: &mut StoreData, today: &str) {
         }
     }
     data.tasks_today.date = today.to_string();
+    true
 }
 
 fn current_task_mut(data: &mut StoreData) -> Option<&mut Task> {
@@ -909,10 +911,48 @@ mod tests {
     fn task_rollover_archives_by_id() {
         let mut d = data_with_task();
         d.tasks_today.date = "2026-07-16".into();
-        roll_over_tasks_if_needed(&mut d, T);
+        assert!(roll_over_tasks_if_needed(&mut d, T));
         assert_eq!(d.tasks_today.date, T);
         assert!(d.tasks_today.tasks.is_empty());
         assert_eq!(d.tasks_archive["2026-07-16"].len(), 1);
+    }
+
+    /// tick 线程每秒都会调日切:同一天内反复调必须是零动作,
+    /// 且不能把已归档的任务再塞一遍(v2 phase 01)
+    #[test]
+    fn task_rollover_is_idempotent_within_a_day() {
+        let mut d = data_with_task();
+        d.tasks_today.date = "2026-07-16".into();
+
+        assert!(roll_over_tasks_if_needed(&mut d, T), "跨天第一次应真的归档");
+        // 之后的每一拍都不应再报告归档
+        for _ in 0..5 {
+            assert!(!roll_over_tasks_if_needed(&mut d, T), "同一天内不应重复归档");
+        }
+        assert_eq!(d.tasks_archive["2026-07-16"].len(), 1, "归档不得重复堆积");
+        assert!(d.tasks_today.tasks.is_empty());
+    }
+
+    /// 隔了多天没开机:中间的空白天不产生归档条目,当天任务照样清空
+    #[test]
+    fn task_rollover_across_multiple_days() {
+        let mut d = data_with_task();
+        d.tasks_today.date = "2026-07-10".into();
+        assert!(roll_over_tasks_if_needed(&mut d, T)); // 直接跳到 07-17
+        assert_eq!(d.tasks_archive.len(), 1);
+        assert!(d.tasks_archive.contains_key("2026-07-10"));
+        assert_eq!(d.tasks_today.date, T);
+        assert!(d.tasks_today.tasks.is_empty());
+    }
+
+    /// 全新安装(date 为空)只把日期补上,不产生空归档条目
+    #[test]
+    fn task_rollover_on_fresh_install() {
+        let mut d = StoreData::default();
+        assert!(roll_over_tasks_if_needed(&mut d, T));
+        assert_eq!(d.tasks_today.date, T);
+        assert!(d.tasks_archive.is_empty(), "空任务不该产生归档条目");
+        assert!(!roll_over_tasks_if_needed(&mut d, T));
     }
 
     #[test]
