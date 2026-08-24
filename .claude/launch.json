@@ -4,8 +4,26 @@
     {
       "name": "designs",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "4317", "--directory", "designs"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4317",
+        "--directory",
+        "designs"
+      ],
       "port": 4317
+    },
+    {
+      "name": "panel",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4318",
+        "--directory",
+        "src"
+      ],
+      "port": 4318
     }
   ]
 }

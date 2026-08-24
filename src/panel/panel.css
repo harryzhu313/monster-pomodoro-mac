@@ -374,19 +374,33 @@ body.theme-monster .monster[src] {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
-  max-height: 180px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
+/* 两行排(v2):第一行 复选框 + 标题 + 删除;第二行 番茄进度 + 设为当前。
+   标题独占整行,10-22 字的任务名不再被右侧按钮挤到换行。 */
 .task-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
   padding: var(--space-sm) 10px;
   background: var(--surface-card);
   border: 1px solid var(--border-hairline);
   border-radius: var(--rounded-md);
   font-size: 12px;
+}
+
+.task-row-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.task-row-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  /* 与第一行标题左对齐(让开复选框宽度 14px + gap 8px) */
+  margin: 5px 0 0 22px;
 }
 
 .task-item.is-current {
@@ -415,7 +429,6 @@ body.theme-monster .monster[src] {
 .task-title {
   flex: 1;
   color: var(--on-neutral);
-  word-break: keep-all;
   overflow-wrap: anywhere;
   min-width: 0;
 }

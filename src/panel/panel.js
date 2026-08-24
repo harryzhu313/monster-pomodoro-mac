@@ -35,7 +35,9 @@ const MOCK_SNAPSHOT = {
   badges: { badges: 0, currentStreak: 2, goal: 7 },
   tasksToday: { date: '2026-01-01', tasks: [
     { id: 'mock1', title: '内参阅读', category: '学习', planned: 4, used: 2, rotten: 0, done: false, isCurrent: true },
-    { id: 'mock2', title: '回邮件', category: '工作', planned: 1, used: 1, rotten: 0, done: true, isCurrent: false },
+    // 长任务名压力样本:验证两行布局下标题不被右侧按钮挤到换行
+    { id: 'mock2', title: '完成网站建设的首页设计稿', category: '工作', planned: 3, used: 0, rotten: 0, done: false, isCurrent: false },
+    { id: 'mock3', title: '回邮件', category: '工作', planned: 1, used: 1, rotten: 0, done: true, isCurrent: false },
   ] },
   last7Days: [],
   lastCategory: '学习',
@@ -303,7 +305,17 @@ function renderTasks() {
     del.setAttribute('aria-label', `删除 ${t.title}`);
     del.addEventListener('click', () => invoke('delete_task', { id: t.id }));
 
-    li.append(cb, title, renderTaskTomatoes(t), current, del);
+    // 两行排:标题独占第一行(长任务名不再被按钮挤到换行),
+    // 番茄进度与操作沉到第二行
+    const top = document.createElement('div');
+    top.className = 'task-row-top';
+    top.append(cb, title, del);
+
+    const bottom = document.createElement('div');
+    bottom.className = 'task-row-bottom';
+    bottom.append(renderTaskTomatoes(t), current);
+
+    li.append(top, bottom);
     els.taskList.appendChild(li);
   }
 }
