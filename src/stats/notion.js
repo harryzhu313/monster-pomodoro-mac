@@ -8,6 +8,12 @@ const httpFetch = tauri?.http?.fetch ?? window.fetch.bind(window);
 
 const NOTION_VERSION = '2022-06-28';
 const NOTION_API = 'https://api.notion.com/v1';
+const EMPTY_NOTION_CONFIG = Object.freeze({
+  token: '',
+  taskDbId: '',
+  dayDbId: '',
+  goalDbId: '',
+});
 
 /** 分类白名单(= Notion select 选项,不可改) */
 const CATEGORY_VALUES = ['工作', '学习', '生活', '兴趣爱好'];
@@ -21,7 +27,7 @@ async function invoke(cmd, args) {
 }
 
 export async function getNotionConfig() {
-  return (await invoke('get_notion_config')) ?? { token: '', taskDbId: '', dayDbId: '' };
+  return normalizeNotionConfig((await invoke('get_notion_config')) ?? EMPTY_NOTION_CONFIG);
 }
 
 export function setNotionConfig(config) {
@@ -36,8 +42,23 @@ function notionHeaders(token) {
   };
 }
 
-async function notionFetch(path, init = {}) {
-  const cfg = await getNotionConfig();
+function normalizeNotionConfig(config) {
+  return {
+    token: String(config?.token || ''),
+    taskDbId: String(config?.taskDbId || ''),
+    dayDbId: String(config?.dayDbId || ''),
+    goalDbId: String(config?.goalDbId || ''),
+  };
+}
+
+async function connectionConfig(configSnapshot) {
+  const config = configSnapshot ?? await getNotionConfig();
+  return Object.freeze(normalizeNotionConfig(config));
+}
+
+/** 用固定配置完成一次请求；连接测试靠它避免执行中途混用不同 Token。 */
+async function notionFetchWithConfig(config, path, init = {}) {
+  const cfg = normalizeNotionConfig(config);
   if (!cfg.token) throw new Error('尚未配置 Notion token');
   const res = await httpFetch(NOTION_API + path, {
     ...init,
@@ -52,27 +73,56 @@ async function notionFetch(path, init = {}) {
   }
   if (!res.ok) {
     const msg = body?.message || body?.raw || `HTTP ${res.status}`;
-    throw new Error(`Notion API ${res.status}: ${msg}`);
+    const error = new Error(`Notion API ${res.status}: ${msg}`);
+    error.status = res.status;
+    throw error;
   }
   return body;
 }
 
+async function notionFetch(path, init = {}) {
+  return notionFetchWithConfig(await getNotionConfig(), path, init);
+}
+
 /** 测试连接:读任务 DB 的 schema;日页面 DB 有值也顺便读(旧 notionTestConnection) */
-export async function testConnection() {
-  const cfg = await getNotionConfig();
+export async function testConnection(configSnapshot = null) {
+  const cfg = await connectionConfig(configSnapshot);
   if (!cfg.token) return { ok: false, error: '请先填入 token' };
   if (!cfg.taskDbId) return { ok: false, error: '请先填入任务 DB ID' };
   try {
-    const task = await notionFetch(`/databases/${cfg.taskDbId}`);
+    const task = await notionFetchWithConfig(cfg, `/databases/${cfg.taskDbId}`);
     const taskTitle = task?.title?.[0]?.plain_text || '(无标题)';
     let dayInfo = '';
     if (cfg.dayDbId) {
-      const day = await notionFetch(`/databases/${cfg.dayDbId}`);
+      const day = await notionFetchWithConfig(cfg, `/databases/${cfg.dayDbId}`);
       const dayTitle = day?.title?.[0]?.plain_text || '(无标题)';
       dayInfo = `｜日页面 DB:「${dayTitle}」`;
     }
     return { ok: true, message: `任务 DB:「${taskTitle}」${dayInfo}` };
   } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+/** Phase 01 基础检查：只读目标 DB 元数据；完整 schema 与月份页留到 Phase 02。 */
+export async function testGoalConnection(configSnapshot = null) {
+  const cfg = await connectionConfig(configSnapshot);
+  if (!cfg.token) return { ok: false, error: '请先填入 token' };
+  if (!cfg.goalDbId) return { ok: false, error: '请先填入月度目标 DB ID' };
+  try {
+    const goal = await notionFetchWithConfig(cfg, `/databases/${cfg.goalDbId}`);
+    const goalTitle = goal?.title?.[0]?.plain_text || '(无标题)';
+    return { ok: true, message: `月度目标 DB:「${goalTitle}」` };
+  } catch (e) {
+    if (e?.status === 401) {
+      return { ok: false, error: 'Token 无效或已失效，请检查 Internal Integration Token' };
+    }
+    if (e?.status === 403 || e?.status === 404) {
+      return {
+        ok: false,
+        error: '无法读取月度目标 DB，请检查 DB ID，并确认该数据库已连接当前 Integration',
+      };
+    }
     return { ok: false, error: String(e.message || e) };
   }
 }

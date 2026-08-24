@@ -202,6 +202,35 @@ pub struct NotionConfig {
     pub token: String,
     pub task_db_id: String,
     pub day_db_id: String,
+    pub goal_db_id: String,
+}
+
+/// Notion 配置用合并式更新：旧前端没有新字段时不能把它覆盖为空。
+/// `Some("")` 表示用户明确清空；`None` 表示调用方没有提交该字段。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotionConfigPatch {
+    pub token: Option<String>,
+    pub task_db_id: Option<String>,
+    pub day_db_id: Option<String>,
+    pub goal_db_id: Option<String>,
+}
+
+impl NotionConfig {
+    pub fn apply_patch(&mut self, patch: NotionConfigPatch) {
+        if let Some(token) = patch.token {
+            self.token = token;
+        }
+        if let Some(task_db_id) = patch.task_db_id {
+            self.task_db_id = task_db_id;
+        }
+        if let Some(day_db_id) = patch.day_db_id {
+            self.day_db_id = day_db_id;
+        }
+        if let Some(goal_db_id) = patch.goal_db_id {
+            self.goal_db_id = goal_db_id;
+        }
+    }
 }
 
 // —— 顶层 ——
@@ -267,6 +296,17 @@ impl Store {
             fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
         }
         fs::rename(&tmp, &self.path)
+    }
+
+    /// 配置保存需要把磁盘失败返回给前端；失败时回滚内存，避免界面连接成功但重启丢配置。
+    pub fn update_notion_config(&mut self, patch: NotionConfigPatch) -> io::Result<()> {
+        let previous = self.data.notion_config.clone();
+        self.data.notion_config.apply_patch(patch);
+        if let Err(error) = self.save() {
+            self.data.notion_config = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -427,7 +467,8 @@ mod tests {
         let v = serde_json::to_value(StoreData::default()).unwrap();
         for key in [
             "timerState", "quotaState", "settings", "stats", "tasksToday",
-            "tasksArchive", "badgesState", "lastCategory", "notionExportLog",
+            "tasksArchive", "badgesState", "monthlyGoals", "lastCategory",
+            "notionExportLog", "notionConfig", "onboardingDone",
         ] {
             assert!(v.get(key).is_some(), "missing key {key}");
         }
@@ -461,6 +502,12 @@ mod tests {
         let mut d = StoreData::default();
         d.timer_state.state = TimerPhase::Focusing; // 备份范围外,应原样保留
         d.quota_state.used = 2;
+        d.notion_config = NotionConfig {
+            token: "local-token".into(),
+            task_db_id: "task-database".into(),
+            day_db_id: "day-database".into(),
+            goal_db_id: "goal-database".into(),
+        };
         let days = import_backup(&mut d, &v1_backup_sample()).unwrap();
         assert_eq!(days, 2);
         assert_eq!(d.stats["2026-06-30"].completed, 5); // 旧数字格式归一化
@@ -478,6 +525,10 @@ mod tests {
         // 备份范围外零改动
         assert_eq!(d.timer_state.state, TimerPhase::Focusing);
         assert_eq!(d.quota_state.used, 2);
+        assert_eq!(d.notion_config.token, "local-token");
+        assert_eq!(d.notion_config.task_db_id, "task-database");
+        assert_eq!(d.notion_config.day_db_id, "day-database");
+        assert_eq!(d.notion_config.goal_db_id, "goal-database");
     }
 
     #[test]
@@ -503,6 +554,12 @@ mod tests {
     fn backup_round_trip_v2() {
         let mut d = StoreData::default();
         import_backup(&mut d, &v1_backup_sample()).unwrap();
+        d.notion_config = NotionConfig {
+            token: "local-token-value".into(),
+            task_db_id: "task-database-value".into(),
+            day_db_id: "day-database-value".into(),
+            goal_db_id: "goal-database-value".into(),
+        };
         let exported = export_backup_json(&d, "0.1.0");
         let mut d2 = StoreData::default();
         let days = import_backup(&mut d2, &exported).unwrap();
@@ -515,6 +572,14 @@ mod tests {
         assert_eq!(d.badges_state.badges, d2.badges_state.badges);
         // 导出不包含 notionConfig(token 不外泄)
         assert!(!exported.contains("notionConfig"));
+        for sensitive_value in [
+            "local-token-value",
+            "task-database-value",
+            "day-database-value",
+            "goal-database-value",
+        ] {
+            assert!(!exported.contains(sensitive_value));
+        }
     }
 
     /// 备份版本升到 3 之后,v1/v2 的老备份仍必须能导入(加键是向后兼容的)
@@ -589,5 +654,116 @@ mod tests {
         assert_eq!(s.extra["futureThing"], 42);
         let back = serde_json::to_value(&s).unwrap();
         assert_eq!(back["futureThing"], 42);
+    }
+
+    #[test]
+    fn notion_config_loads_legacy_data_and_round_trips_goal_db_id() {
+        let legacy = r#"{
+          "notionConfig": {
+            "token": "legacy-token",
+            "taskDbId": "legacy-task",
+            "dayDbId": "legacy-day"
+          }
+        }"#;
+        let data: StoreData = serde_json::from_str(legacy).unwrap();
+        assert_eq!(data.notion_config.token, "legacy-token");
+        assert_eq!(data.notion_config.task_db_id, "legacy-task");
+        assert_eq!(data.notion_config.day_db_id, "legacy-day");
+        assert!(data.notion_config.goal_db_id.is_empty());
+
+        let mut with_goal = data;
+        with_goal.notion_config.goal_db_id = "goal-database".into();
+        let round_trip: StoreData =
+            serde_json::from_value(serde_json::to_value(&with_goal).unwrap()).unwrap();
+        assert_eq!(round_trip.notion_config.goal_db_id, "goal-database");
+    }
+
+    #[test]
+    fn notion_config_patch_preserves_omitted_fields_and_allows_clearing() {
+        let mut config = NotionConfig {
+            token: "token".into(),
+            task_db_id: "task".into(),
+            day_db_id: "day".into(),
+            goal_db_id: "goal".into(),
+        };
+
+        config.apply_patch(NotionConfigPatch {
+            task_db_id: Some("new-task".into()),
+            ..Default::default()
+        });
+        assert_eq!(config.token, "token");
+        assert_eq!(config.task_db_id, "new-task");
+        assert_eq!(config.day_db_id, "day");
+        assert_eq!(config.goal_db_id, "goal");
+
+        config.apply_patch(NotionConfigPatch {
+            goal_db_id: Some(String::new()),
+            ..Default::default()
+        });
+        assert!(config.goal_db_id.is_empty());
+        assert_eq!(config.token, "token");
+        assert_eq!(config.task_db_id, "new-task");
+        assert_eq!(config.day_db_id, "day");
+    }
+
+    #[test]
+    fn notion_config_survives_store_save_and_reload() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tomato-monster-notion-config-{}-{unique}.json",
+            std::process::id()
+        ));
+        let mut store = Store {
+            path: path.clone(),
+            data: StoreData::default(),
+        };
+        store
+            .update_notion_config(NotionConfigPatch {
+                token: Some("token".into()),
+                task_db_id: Some("task".into()),
+                day_db_id: Some("day".into()),
+                goal_db_id: Some("goal".into()),
+            })
+            .unwrap();
+
+        let loaded = Store::load(path.clone());
+        assert_eq!(loaded.data.notion_config.token, "token");
+        assert_eq!(loaded.data.notion_config.task_db_id, "task");
+        assert_eq!(loaded.data.notion_config.day_db_id, "day");
+        assert_eq!(loaded.data.notion_config.goal_db_id, "goal");
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn notion_config_save_failure_rolls_back_memory() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let parent_file = std::env::temp_dir().join(format!(
+            "tomato-monster-notion-config-parent-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(&parent_file, "not a directory").unwrap();
+
+        let mut store = Store {
+            path: parent_file.join("store.json"),
+            data: StoreData::default(),
+        };
+        store.data.notion_config.token = "original-token".into();
+        let result = store.update_notion_config(NotionConfigPatch {
+            token: Some("new-token".into()),
+            goal_db_id: Some("new-goal".into()),
+            ..Default::default()
+        });
+
+        assert!(result.is_err());
+        assert_eq!(store.data.notion_config.token, "original-token");
+        assert!(store.data.notion_config.goal_db_id.is_empty());
+        std::fs::remove_file(parent_file).unwrap();
     }
 }

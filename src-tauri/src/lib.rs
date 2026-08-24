@@ -358,8 +358,13 @@ async fn get_notion_config(app: AppHandle) -> store::NotionConfig {
 }
 
 #[tauri::command]
-async fn set_notion_config(app: AppHandle, config: store::NotionConfig) {
-    with_store(&app, |d, _, _, _| d.notion_config = config);
+async fn set_notion_config(
+    app: AppHandle,
+    config: store::NotionConfigPatch,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut guard = state.store.lock().expect("store lock poisoned");
+    guard.update_notion_config(config).map_err(|e| e.to_string())
 }
 
 /// 记一笔 Notion 导出历史(旧 notionExportLog 语义:prev[date] = {at, ...summary})

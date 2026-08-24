@@ -133,7 +133,7 @@
     <section class="card">
       <h2>📤 Notion 导出</h2>
       <p class="body-text">
-        把每天的任务作为行记录导入 Notion。每个任务一行,映射"任务名 / 日期 / 番茄钟数 / 分类";若填了日页面 DB ID,会自动按日期关联到对应的"日"页面。
+        每日任务继续按"任务名 / 日期 / 番茄钟数 / 分类"逐行导入;月度目标 DB 用于后续同步本月目标。两套连接可以分别测试,互不阻断。
       </p>
       <div class="row">
         <label for="notion-token">Internal Integration Token</label>
@@ -151,12 +151,22 @@
                autocomplete="off" />
       </div>
       <div class="row">
-        <label>测试连接</label>
-        <button id="btn-notion-test" class="btn-sm-primary">测试</button>
+        <label for="notion-goal-db">月度目标 DB ID</label>
+        <input type="text" id="notion-goal-db" class="notion-input" placeholder="32 位 id"
+               autocomplete="off" />
       </div>
-      <div id="notion-status" class="notion-status"></div>
+      <div class="row">
+        <label for="btn-notion-test">每日任务连接</label>
+        <button type="button" id="btn-notion-test" class="btn-clear">测试每日库</button>
+      </div>
+      <div id="notion-status" class="notion-status" role="status" aria-live="polite"></div>
+      <div class="row">
+        <label for="btn-notion-goal-test">月度目标连接</label>
+        <button type="button" id="btn-notion-goal-test" class="btn-clear">测试目标库</button>
+      </div>
+      <div id="notion-goal-status" class="notion-status" role="status" aria-live="polite"></div>
       <p class="hint">
-        Token 只存在本机,不会上传到任何服务器。前往 Notion Integrations 页面生成 token,并把 DB 分享给该 integration(DB 右上 ··· → Connections)。
+        Token 只存在本机,不会上传到任何服务器。请把要使用的数据库都连接到当前 Integration(DB 右上 ··· → Connections)。
       </p>
     </section>
 

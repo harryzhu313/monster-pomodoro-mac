@@ -65,8 +65,11 @@ const els = {
   notionToken: document.getElementById('notion-token'),
   notionTaskDb: document.getElementById('notion-task-db'),
   notionDayDb: document.getElementById('notion-day-db'),
+  notionGoalDb: document.getElementById('notion-goal-db'),
   notionStatus: document.getElementById('notion-status'),
+  notionGoalStatus: document.getElementById('notion-goal-status'),
   btnNotionTest: document.getElementById('btn-notion-test'),
+  btnNotionGoalTest: document.getElementById('btn-notion-goal-test'),
   launchAtLogin: document.getElementById('launch-at-login'),
   shortcutInput: document.getElementById('shortcut-input'),
   shortcutStatus: document.getElementById('shortcut-status'),
@@ -827,9 +830,32 @@ els.backupFile.addEventListener('change', async () => {
 
 // —— Notion 配置(平移旧 loadNotionConfig/saveNotionConfig/testNotionConnection)——
 
-function setNotionStatus(kind, text) {
-  els.notionStatus.className = 'notion-status is-' + kind;
-  els.notionStatus.textContent = text;
+function setNotionStatus(target, kind, text) {
+  target.className = 'notion-status is-' + kind;
+  target.textContent = text;
+}
+
+function clearNotionStatus(target) {
+  target.className = 'notion-status';
+  target.textContent = '';
+}
+
+const notionStatusRevisions = new WeakMap();
+
+function nextNotionStatusRevision(target) {
+  const revision = (notionStatusRevisions.get(target) || 0) + 1;
+  notionStatusRevisions.set(target, revision);
+  return revision;
+}
+
+function notionButtonForStatus(target) {
+  return target === els.notionGoalStatus ? els.btnNotionGoalTest : els.btnNotionTest;
+}
+
+function notionStatusesForField(key) {
+  if (key === 'token') return [els.notionStatus, els.notionGoalStatus];
+  if (key === 'goalDbId') return [els.notionGoalStatus];
+  return [els.notionStatus];
 }
 
 async function loadNotionConfig() {
@@ -837,33 +863,97 @@ async function loadNotionConfig() {
   els.notionToken.value = cfg.token || '';
   els.notionTaskDb.value = cfg.taskDbId || '';
   els.notionDayDb.value = cfg.dayDbId || '';
+  els.notionGoalDb.value = cfg.goalDbId || '';
 }
 
-function saveNotionConfig() {
-  return notion.setNotionConfig({
+function readNotionConfigForm() {
+  return {
     token: els.notionToken.value.trim(),
     taskDbId: els.notionTaskDb.value.trim(),
     dayDbId: els.notionDayDb.value.trim(),
-  });
+    goalDbId: els.notionGoalDb.value.trim(),
+  };
 }
 
-for (const el of [els.notionToken, els.notionTaskDb, els.notionDayDb]) {
-  el.addEventListener('blur', saveNotionConfig);
+function saveNotionField(key, el) {
+  return notion.setNotionConfig({ [key]: el.value.trim() });
+}
+
+const notionConfigFields = [
+  [els.notionToken, 'token'],
+  [els.notionTaskDb, 'taskDbId'],
+  [els.notionDayDb, 'dayDbId'],
+  [els.notionGoalDb, 'goalDbId'],
+];
+
+for (const [el, key] of notionConfigFields) {
+  el.addEventListener('input', () => {
+    for (const status of notionStatusesForField(key)) {
+      nextNotionStatusRevision(status);
+      if (notionButtonForStatus(status).disabled) {
+        setNotionStatus(status, 'loading', '配置已修改，请在当前检查结束后重新测试');
+      } else {
+        clearNotionStatus(status);
+      }
+    }
+  });
+  el.addEventListener('blur', () => {
+    saveNotionField(key, el).catch((e) => {
+      const message = '✗ 配置保存失败：' + String(e.message || e);
+      for (const status of notionStatusesForField(key)) {
+        nextNotionStatusRevision(status);
+        setNotionStatus(status, 'error', message);
+      }
+    });
+  });
   el.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') el.blur();
   });
 }
 
-els.btnNotionTest.addEventListener('click', async () => {
-  await saveNotionConfig();
-  setNotionStatus('loading', '正在连接 Notion…');
+async function runNotionConnectionTest(button, status, loadingText, configKeys, test) {
+  const configSnapshot = Object.freeze(readNotionConfigForm());
+  const requestRevision = nextNotionStatusRevision(status);
+  button.disabled = true;
+  setNotionStatus(status, 'loading', loadingText);
   try {
-    const r = await notion.testConnection();
-    if (r.ok) setNotionStatus('ok', '✓ ' + r.message);
-    else setNotionStatus('error', '✗ ' + (r.error || '未知错误'));
+    await notion.setNotionConfig(configSnapshot);
+    const result = await test(configSnapshot);
+    if (notionStatusRevisions.get(status) !== requestRevision) return;
+    const currentConfig = readNotionConfigForm();
+    if (configKeys.some((key) => currentConfig[key] !== configSnapshot[key])) {
+      setNotionStatus(status, 'loading', '配置已修改，请重新测试');
+      return;
+    }
+    if (result.ok) setNotionStatus(status, 'ok', '✓ ' + result.message);
+    else setNotionStatus(status, 'error', '✗ ' + (result.error || '未知错误'));
   } catch (e) {
-    setNotionStatus('error', '✗ ' + String(e.message || e));
+    if (notionStatusRevisions.get(status) === requestRevision) {
+      setNotionStatus(status, 'error', '✗ ' + String(e.message || e));
+    }
+  } finally {
+    button.disabled = false;
   }
+}
+
+els.btnNotionTest.addEventListener('click', () => {
+  runNotionConnectionTest(
+    els.btnNotionTest,
+    els.notionStatus,
+    '正在检查每日任务连接…',
+    ['token', 'taskDbId', 'dayDbId'],
+    notion.testConnection
+  );
+});
+
+els.btnNotionGoalTest.addEventListener('click', () => {
+  runNotionConnectionTest(
+    els.btnNotionGoalTest,
+    els.notionGoalStatus,
+    '正在检查月度目标连接…',
+    ['token', 'goalDbId'],
+    notion.testGoalConnection
+  );
 });
 
 // —— 刷新编排 ——
