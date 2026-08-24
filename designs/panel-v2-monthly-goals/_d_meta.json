@@ -1,0 +1,18 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "面板加宽与月度目标探索": {
+      "versions": [
+        {
+          "path": "面板重设计与月度目标.html",
+          "createdAt": "2026-08-23T23:46:46.617Z",
+          "status": "needs-review"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-08-23T23:46:46.617Z",
+  "updatedAt": "2026-08-24T01:48:51.732Z"
+}
