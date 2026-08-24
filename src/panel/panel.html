@@ -51,6 +51,18 @@
         <span class="tasks-count badge" id="tasks-count">0 个完成</span>
       </header>
 
+      <!-- 月度目标(v2):勾选即按预设加入今日任务;无目标时整块隐藏 -->
+      <div class="goal-strip is-hidden" id="goal-strip">
+        <div class="goal-strip-head">
+          <span class="goal-strip-label" id="goal-strip-label">本月目标 · 勾选加入今天</span>
+          <button type="button" class="goal-manage" id="goal-manage">管理 ›</button>
+        </div>
+        <div class="goal-chips" id="goal-chips"></div>
+        <div class="goal-progress" title="本月所有目标合计进度">
+          <i id="goal-progress-bar"></i>
+        </div>
+      </div>
+
       <form class="task-add" id="task-add-form">
         <input type="text" id="task-input" class="task-input"
                placeholder="比如:内参阅读" maxlength="40" autocomplete="off" />

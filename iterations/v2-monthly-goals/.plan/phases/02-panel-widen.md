@@ -1,12 +1,12 @@
 # Phase 02 — 面板加宽与两行任务行
 
 **Status**: `completed`
-**目标**: 面板 360×560，任务行改两行排，10–22 字的任务名不再挤压换行
+**目标**: 面板加宽到 360（高度在 phase 04 实测后定为 700），任务行改两行排，10–22 字的任务名不再挤压换行
 **前置**: Phase 01（避免和数据修复混在一次提交里）
 
 ## 验收判据
 
-- 面板宽 360px、高 560px；托盘点击弹出位置仍正确（多显示器下 positioner 不回退到右上角）
+- 面板宽 360px（高度初定 560，phase 04 实测后改为 700）；托盘点击弹出位置仍正确（多显示器下 positioner 不回退到右上角）
 - 任务行两行排：第一行 复选框 + 任务名 + 分类徽章 + 删除；第二行 番茄进度 + 「设为当前」
 - 任务名「完成网站建设的首页设计稿」（12 字）在第一行内不换行（实测单行上限 16 个汉字，含分类徽章占位）
 - 添加框的 placeholder「比如：内参阅读」完整可见，不被截断
@@ -25,7 +25,7 @@
 
 **Tasks**：
 
-- [x] `tauri.conf.json` panel 窗口 width 300→360、height 480→560
+- [x] `tauri.conf.json` panel 窗口 width 300→360、height 480→560（**phase 04 实测内容高度后由用户拍板改为 700**）
 - [x] `panel.css` `.task-item` 拆为 `.task-row-top` / `.task-row-bottom` 两行；第二行左边距 22px 与标题对齐（让开复选框 14px + gap 8px）
 - [x] `panel.js` `renderTasks` 按新 DOM 结构生成（`lastTasksJson` 差量重建逻辑原样保留）
 - [x] `.task-title` 去掉 `word-break: keep-all`（两行布局下不再需要挤压保护），保留 `overflow-wrap: anywhere` 兜底超长英文串

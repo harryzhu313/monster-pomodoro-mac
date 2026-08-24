@@ -39,6 +39,14 @@ const MOCK_SNAPSHOT = {
     { id: 'mock2', title: '完成网站建设的首页设计稿', category: '工作', planned: 3, used: 0, rotten: 0, done: false, isCurrent: false },
     { id: 'mock3', title: '回邮件', category: '工作', planned: 1, used: 1, rotten: 0, done: true, isCurrent: false },
   ] },
+  monthlyGoals: [
+    { id: 'g1', title: '内参阅读', category: '学习', monthTarget: 30, monthDone: 12,
+      checkedToday: true, locked: true },
+    { id: 'g2', title: '内驱式学习', category: '学习', monthTarget: 40, monthDone: 18,
+      checkedToday: true, locked: false },
+    { id: 'g3', title: '网站建设完成', category: '工作', monthTarget: 20, monthDone: 5,
+      checkedToday: false, locked: false },
+  ],
   last7Days: [],
   lastCategory: '学习',
   now: Date.now(),
@@ -73,6 +81,11 @@ const els = {
   taskPlannedInput: document.getElementById('task-planned'),
   taskList: document.getElementById('task-list'),
   taskEmpty: document.getElementById('task-empty'),
+  goalStrip: document.getElementById('goal-strip'),
+  goalStripLabel: document.getElementById('goal-strip-label'),
+  goalChips: document.getElementById('goal-chips'),
+  goalProgressBar: document.getElementById('goal-progress-bar'),
+  goalManage: document.getElementById('goal-manage'),
   onboarding: document.getElementById('onboarding'),
   obNote: document.getElementById('ob-note'),
   obFile: document.getElementById('ob-file'),
@@ -81,6 +94,7 @@ const els = {
 let snap = null;
 let lastTasksJson = '';   // 任务列表只在内容变化时重建,避免每秒快照打断输入/焦点
 let lastHarvestJson = '';
+let lastGoalsJson = '';
 let categoryInitialized = false;
 
 // —— 计时卡(平移旧 renderTimer)——
@@ -223,9 +237,82 @@ function renderHarvest() {
   els.streak.textContent = `🔥 已连续 ${current} 天`;
 }
 
+// —— 月度目标 chips(v2)——
+// 数据全部来自快照的 monthlyGoals(进度、勾选态、锁定态都在 Rust 侧算好),
+// 这里只负责画和把点击翻译成 command。
+
+function renderGoals() {
+  const goals = snap.monthlyGoals || [];
+  const key = JSON.stringify(goals);
+  if (key === lastGoalsJson) return;
+  lastGoalsJson = key;
+
+  // 一个目标都没有时整块隐藏,面板回到没有这个功能时的样子
+  els.goalStrip.classList.toggle('is-hidden', goals.length === 0);
+  if (goals.length === 0) return;
+
+  // 月份取自快照的 today,不读本地时钟(AGENTS 规则 6)
+  const month = Number((snap.today || '').slice(5, 7));
+  els.goalStripLabel.textContent = month
+    ? `${month} 月目标 · 勾选加入今天`
+    : '本月目标 · 勾选加入今天';
+
+  els.goalChips.innerHTML = '';
+  for (const g of goals) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'goal-chip';
+    if (g.checkedToday) chip.classList.add('is-on');
+    if (g.locked) chip.classList.add('is-locked');
+    chip.setAttribute('aria-pressed', String(!!g.checkedToday));
+
+    const title = document.createElement('span');
+    title.className = 'chip-title';
+    title.textContent = (g.checkedToday ? '✓ ' : '') + g.title;
+
+    const prog = document.createElement('span');
+    prog.className = 'chip-prog';
+    prog.textContent = `${g.monthDone}/${g.monthTarget}`;
+
+    chip.append(title, prog);
+
+    if (g.locked) {
+      chip.title = '今天已经投入番茄了,不能取消——取消会连带删掉已有记录';
+      chip.disabled = true;
+    } else {
+      chip.title = g.checkedToday
+        ? `点一下从今天移除(${g.category})`
+        : `点一下加入今天(${g.category})`;
+      chip.addEventListener('click', () => invoke('toggle_goal_today', { id: g.id }));
+    }
+    els.goalChips.appendChild(chip);
+  }
+
+  // 合计进度条:所有目标的本月完成数 / 本月总量
+  const done = goals.reduce((a, g) => a + (g.monthDone || 0), 0);
+  const target = goals.reduce((a, g) => a + (g.monthTarget || 0), 0);
+  const pct = target > 0 ? Math.min(100, Math.round((done / target) * 100)) : 0;
+  els.goalProgressBar.style.width = `${pct}%`;
+}
+
 // —— 今日任务(平移旧 renderTasks/renderTaskTomatoes)——
 
 function renderTaskTomatoes(task) {
+  // 计划数超过折叠上限时,一排图标 + "+N" 已经糊成一片,改用数值更清楚
+  if (task.planned > MAX_TOMATO_ICONS) {
+    const num = document.createElement('span');
+    num.className = 'task-plan-num';
+    num.innerHTML = '🍅 <b></b>';
+    num.querySelector('b').textContent = String(task.used);
+    num.append(`/${task.planned}`);
+    if (task.used > task.planned) {
+      const over = document.createElement('span');
+      over.className = 'tomato overflow';
+      over.textContent = `超${task.used - task.planned}`;
+      num.appendChild(over);
+    }
+    return num;
+  }
   const wrap = document.createElement('div');
   wrap.className = 'task-tomatoes';
   const plannedDisplay = Math.min(task.planned, MAX_TOMATO_ICONS);
@@ -311,9 +398,48 @@ function renderTasks() {
     top.className = 'task-row-top';
     top.append(cb, title, del);
 
+    // 今日计划番茄数:沿用「添加」那行的数字框(type=number,自带上下箭头,
+    // 既能敲也能点)。下限是今天已投入的数量,真正的夹紧在 Rust 侧
+    const planWrap = document.createElement('div');
+    planWrap.className = 'task-plan';
+    const planInput = document.createElement('input');
+    planInput.type = 'number';
+    planInput.className = 'task-plan-input';
+    planInput.min = String(Math.max(1, t.used));
+    planInput.max = '99';
+    planInput.value = String(t.planned);
+    planInput.disabled = !!t.done;
+    planInput.title = t.used > 0
+      ? `今天计划几个番茄(已做 ${t.used} 个,不能改得更少)`
+      : '今天计划几个番茄';
+    planInput.setAttribute('aria-label', `${t.title} 今天计划几个番茄`);
+    planInput.addEventListener('focus', () => planInput.select());
+    const commitPlan = () => {
+      const raw = planInput.value.trim();
+      const n = Number(raw);
+      // 空串 Number('') === 0 会被当成合法值发出去,必须先挡掉;
+      // 小于 1 或非数字同样回弹,不劳烦后端
+      if (raw === '' || !Number.isFinite(n) || n < 1 || n === t.planned) {
+        planInput.value = String(t.planned);
+        return;
+      }
+      invoke('set_task_planned', { id: t.id, planned: n });
+    };
+    planInput.addEventListener('blur', commitPlan);
+    planInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        planInput.blur();
+      } else if (e.key === 'Escape') {
+        planInput.value = String(t.planned);
+        planInput.blur();
+      }
+    });
+    planWrap.append(planInput, renderTaskTomatoes(t));
+
     const bottom = document.createElement('div');
     bottom.className = 'task-row-bottom';
-    bottom.append(renderTaskTomatoes(t), current);
+    bottom.append(planWrap, current);
 
     li.append(top, bottom);
     els.taskList.appendChild(li);
@@ -324,6 +450,7 @@ function render(next) {
   snap = next;
   renderTimer();
   renderHarvest();
+  renderGoals();
   renderTasks();
   els.onboarding.classList.toggle('is-hidden', snap.onboardingDone !== false);
   if (!categoryInitialized && snap.lastCategory) {
@@ -372,6 +499,7 @@ els.btnPrimary.addEventListener('click', () => {
 els.btnAbandon.addEventListener('click', () => invoke('abandon'));
 els.btnReset.addEventListener('click', () => invoke('reset'));
 els.btnStats.addEventListener('click', () => invoke('open_stats'));
+els.goalManage.addEventListener('click', () => invoke('open_stats'));
 els.quota.addEventListener('dblclick', () => invoke('reset_quota'));
 
 // —— 加时(平移旧 lockscreen.js claim 逻辑)——

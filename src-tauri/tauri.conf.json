@@ -15,7 +15,7 @@
         "url": "panel/panel.html",
         "title": "Tomato Monster",
         "width": 360,
-        "height": 560,
+        "height": 700,
         "resizable": false,
         "decorations": false,
         "transparent": true,

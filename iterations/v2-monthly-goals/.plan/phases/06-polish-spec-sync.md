@@ -23,7 +23,7 @@
 
 - [ ] 全链路手工验收（上述 5 条）
 - [ ] `ARCHITECTURE.md` §4 schema 补 `monthlyGoals` 与 `Task.goalId`
-- [ ] `DESIGN.md` 如记录了面板尺寸则同步 360×560；跑 `npx @google/design.md lint DESIGN.md`
+- [ ] `DESIGN.md` 如记录了面板尺寸则同步 360×700；跑 `npx @google/design.md lint DESIGN.md`
 - [ ] `iterations/v2-monthly-goals/PRD.md` 回填实施中的偏差（若有）
 - [ ] plan.md 阶段总览状态全部置 completed
 - [ ] `cargo tauri build` 出 .dmg 自用

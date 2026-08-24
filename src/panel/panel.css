@@ -324,6 +324,119 @@ body.theme-monster .monster[src] {
   border-radius: var(--rounded-full);
 }
 
+/* —— 月度目标 chips(v2)—— */
+
+.goal-strip {
+  margin-bottom: var(--space-sm);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.goal-strip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.goal-strip-label {
+  font: var(--text-caption);
+  font-size: 10px;
+  color: var(--on-neutral-muted);
+  letter-spacing: 0.5px;
+}
+
+.goal-manage {
+  border: none;
+  background: transparent;
+  font: var(--text-caption);
+  font-size: 10px;
+  color: var(--on-neutral-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.goal-manage:hover {
+  color: var(--on-neutral);
+}
+
+.goal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.goal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font: var(--text-caption);
+  color: var(--on-neutral);
+  padding: 3px 10px;
+  border-radius: var(--rounded-full);
+  border: 1px solid var(--border-hairline);
+  background: var(--surface-card);
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+  max-width: 100%;
+}
+
+.goal-chip:hover:not(.is-locked) {
+  border-color: var(--current-task-border);
+}
+
+.goal-chip:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.goal-chip.is-on {
+  background: var(--goal-chip-on-bg);
+  border-color: var(--goal-chip-on-border);
+  color: var(--primary-text);
+  font-weight: 500;
+}
+
+/* 今天已投入番茄:不可取消,鼠标不再暗示可点 */
+.goal-chip.is-locked {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.goal-chip .chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-chip .chip-prog {
+  font-size: 10px;
+  color: var(--on-neutral-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.goal-chip.is-on .chip-prog {
+  color: var(--primary-text);
+  opacity: 0.75;
+}
+
+.goal-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--heat-0);
+  margin-top: 5px;
+  overflow: hidden;
+}
+
+.goal-progress i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  opacity: 0.55;
+  transition: width 200ms;
+}
+
 .task-add {
   display: flex;
   gap: var(--space-xs);
@@ -447,6 +560,52 @@ body.theme-monster .monster[src] {
 .task-category-badge.cat-study { background: var(--cat-study-bg); color: var(--cat-study-fg); }
 .task-category-badge.cat-life  { background: var(--cat-life-bg);  color: var(--cat-life-fg); }
 .task-category-badge.cat-hobby { background: var(--cat-hobby-bg); color: var(--cat-hobby-fg); }
+
+/* 第二行:今日计划番茄数(可改)+ 进度图标 */
+.task-plan {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.task-plan-input {
+  width: 46px;
+  padding: 3px 2px 3px 6px;
+  text-align: center;
+  font: var(--text-caption);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  flex-shrink: 0;
+}
+
+.task-plan-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.task-plan-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 计划数大于图标折叠上限时改用数值,避免一排番茄铺满整行 */
+.task-plan-num {
+  font: var(--text-caption);
+  color: var(--on-neutral-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.task-plan-num b {
+  color: var(--on-neutral);
+  font-weight: 600;
+}
 
 .task-tomatoes {
   display: flex;
