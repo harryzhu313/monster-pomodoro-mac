@@ -369,6 +369,76 @@ button:disabled {
   color: var(--on-neutral-muted);
 }
 
+/* —— 月度番茄目标管理 —— */
+
+.monthly-goals-header {
+  margin-bottom: 0;
+}
+
+.monthly-goals-subtitle {
+  margin: 2px 0 var(--space-md);
+}
+
+.monthly-goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.monthly-goal-row,
+.monthly-goal-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 80px 76px;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.monthly-goal-row {
+  padding: 7px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--surface-card);
+}
+
+.monthly-goal-add {
+  margin-top: 10px;
+}
+
+.monthly-goal-field {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-sm);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  font: var(--text-caption);
+  font-size: 12px;
+}
+
+.monthly-goal-field:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.monthly-goal-target {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.monthly-goal-delete,
+.monthly-goal-add-button {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.monthly-goals-empty {
+  padding: var(--space-sm) 0 var(--space-md);
+  color: var(--on-neutral-muted);
+  font: var(--text-caption);
+  text-align: center;
+}
+
 /* —— 历史明细 —— */
 
 .history-title-actions {

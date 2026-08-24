@@ -3,6 +3,7 @@
 // 设置改动 → update_settings command;历史完成态 → set_history_task_done。
 
 import * as notion from './notion.js';
+import { CATEGORY_VALUES, normalizeCategory } from '../shared/util.js';
 
 const tauri = window.__TAURI__ ?? null;
 
@@ -39,6 +40,13 @@ const els = {
   statLongest: document.getElementById('stat-longest'),
   statTotal: document.getElementById('stat-total'),
   btnClearToday: document.getElementById('btn-clear-today'),
+  monthlyGoalsSubtitle: document.getElementById('monthly-goals-subtitle'),
+  monthlyGoalsEmpty: document.getElementById('monthly-goals-empty'),
+  monthlyGoalsList: document.getElementById('monthly-goals-list'),
+  monthlyGoalAddForm: document.getElementById('monthly-goal-add-form'),
+  monthlyGoalTitle: document.getElementById('monthly-goal-title'),
+  monthlyGoalCategory: document.getElementById('monthly-goal-category'),
+  monthlyGoalTarget: document.getElementById('monthly-goal-target'),
   historyList: document.getElementById('history-list'),
   historyCard: document.getElementById('history-card'),
   historyPanel: document.getElementById('history-panel'),
@@ -72,6 +80,10 @@ const LOVE_MONSTER_URL = '../shared/monsters/love.svg';
 let bundle = null; // get_stats_bundle 结果
 let snap = null;   // get_state 快照
 let lastTodayStatsJson = '';
+let lastMonthlyGoalsJson = '';
+const monthlyGoalRows = new Map();
+let pendingGoalDelete = null;
+let goalDeleteTimer = null;
 
 // —— 设置区(平移旧 renderSettings/patchSettings)——
 
@@ -234,6 +246,230 @@ function renderSevenDays() {
   els.statLongest.textContent = longest;
   els.statTotal.textContent = total;
 }
+
+// —— 月度番茄目标管理(v2)——
+
+function populateCategorySelect(select, value) {
+  select.innerHTML = '';
+  for (const category of CATEGORY_VALUES) {
+    const option = document.createElement('option');
+    option.value = category;
+    option.textContent = category;
+    select.appendChild(option);
+  }
+  select.value = normalizeCategory(value);
+}
+
+function resetGoalDeleteConfirmation() {
+  if (goalDeleteTimer) clearTimeout(goalDeleteTimer);
+  goalDeleteTimer = null;
+  if (pendingGoalDelete?.button?.isConnected) {
+    pendingGoalDelete.button.classList.remove('confirming');
+    pendingGoalDelete.button.textContent = '删除';
+    pendingGoalDelete.button.title = pendingGoalDelete.defaultTitle;
+  }
+  pendingGoalDelete = null;
+}
+
+async function runGoalCommand(command, args) {
+  try {
+    await invoke(command, args);
+    return true;
+  } catch (e) {
+    await messageDialog(`月度目标保存失败:${String(e.message || e)}`);
+    // 命令失败时用最后一份 Rust 快照还原表单。
+    lastMonthlyGoalsJson = '';
+    renderMonthlyGoals();
+    return false;
+  }
+}
+
+function updateGoal(id, patch) {
+  return runGoalCommand('update_goal', {
+    id,
+    title: null,
+    category: null,
+    monthTarget: null,
+    ...patch,
+  });
+}
+
+function bindGoalRow(row) {
+  const title = row.querySelector('.monthly-goal-title');
+  const category = row.querySelector('.monthly-goal-category');
+  const target = row.querySelector('.monthly-goal-target');
+  const deleteButton = row.querySelector('.monthly-goal-delete');
+
+  title.addEventListener('change', async () => {
+    const goal = row.monthlyGoal;
+    const next = title.value.trim();
+    if (!next || next === goal.title) {
+      title.value = goal.title;
+      return;
+    }
+    if (!await updateGoal(goal.id, { title: next })) title.value = goal.title;
+  });
+  title.addEventListener('keydown', (e) => {
+    const goal = row.monthlyGoal;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      title.blur();
+    } else if (e.key === 'Escape') {
+      title.value = goal.title;
+      title.blur();
+    }
+  });
+
+  category.addEventListener('change', async () => {
+    const goal = row.monthlyGoal;
+    const previous = normalizeCategory(goal.category);
+    if (!await updateGoal(goal.id, { category: category.value })) category.value = previous;
+  });
+
+  target.addEventListener('change', async () => {
+    const goal = row.monthlyGoal;
+    const parsed = Number(target.value);
+    if (!Number.isFinite(parsed)) {
+      target.value = String(goal.monthTarget);
+      return;
+    }
+    const next = Math.max(1, Math.min(999, Math.floor(parsed)));
+    target.value = String(next);
+    if (next !== goal.monthTarget && !await updateGoal(goal.id, { monthTarget: next })) {
+      target.value = String(goal.monthTarget);
+    }
+  });
+  target.addEventListener('keydown', (e) => {
+    const goal = row.monthlyGoal;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      target.blur();
+    } else if (e.key === 'Escape') {
+      target.value = String(goal.monthTarget);
+      target.blur();
+    }
+  });
+
+  deleteButton.addEventListener('click', async () => {
+    const goal = row.monthlyGoal;
+    if (pendingGoalDelete?.id === goal.id) {
+      resetGoalDeleteConfirmation();
+      deleteButton.disabled = true;
+      const ok = await runGoalCommand('delete_goal', { id: goal.id });
+      if (!ok) deleteButton.disabled = false;
+      return;
+    }
+    resetGoalDeleteConfirmation();
+    const defaultDeleteTitle = row.monthlyGoalDeleteTitle;
+    pendingGoalDelete = { id: goal.id, button: deleteButton, defaultTitle: defaultDeleteTitle };
+    deleteButton.classList.add('confirming');
+    deleteButton.textContent = '再点确认';
+    deleteButton.title = '再次点击确认删除；已产生的任务记录会保留';
+    goalDeleteTimer = setTimeout(resetGoalDeleteConfirmation, 3000);
+  });
+}
+
+function createGoalRow() {
+  const row = document.createElement('div');
+  row.className = 'monthly-goal-row';
+  row.innerHTML = `
+    <input type="text" class="monthly-goal-field monthly-goal-title" autocomplete="off" />
+    <select class="monthly-goal-field monthly-goal-category"></select>
+    <input type="number" class="monthly-goal-field monthly-goal-target"
+           min="1" max="999" step="1" title="本月番茄总量" />
+    <button type="button" class="btn-clear monthly-goal-delete">删除</button>
+  `;
+  populateCategorySelect(row.querySelector('.monthly-goal-category'), '工作');
+  bindGoalRow(row);
+  return row;
+}
+
+function updateGoalRow(row, goal) {
+  row.monthlyGoal = goal;
+  const title = row.querySelector('.monthly-goal-title');
+  const category = row.querySelector('.monthly-goal-category');
+  const target = row.querySelector('.monthly-goal-target');
+  const deleteButton = row.querySelector('.monthly-goal-delete');
+
+  // 状态广播可能在用户输入时到达：保留正在编辑的控件值和焦点。
+  if (document.activeElement !== title) title.value = goal.title;
+  if (document.activeElement !== category) category.value = normalizeCategory(goal.category);
+  if (document.activeElement !== target) target.value = String(goal.monthTarget);
+
+  title.setAttribute('aria-label', `目标名称:${goal.title}`);
+  category.setAttribute('aria-label', `目标分类:${goal.title}`);
+  target.setAttribute('aria-label', `本月番茄总量:${goal.title}`);
+  row.monthlyGoalDeleteTitle = `删除“${goal.title}”（已产生的今日和历史任务会保留）`;
+  deleteButton.title = row.monthlyGoalDeleteTitle;
+  deleteButton.setAttribute('aria-label', row.monthlyGoalDeleteTitle);
+}
+
+function renderMonthlyGoals() {
+  const goals = Array.isArray(snap?.monthlyGoals) ? snap.monthlyGoals : [];
+  // 管理卡不展示进度/今日勾选态，这些字段变化时不碰表单 DOM。
+  const displayedGoals = goals.map((goal) => [
+    goal.id,
+    goal.title,
+    normalizeCategory(goal.category),
+    goal.monthTarget,
+  ]);
+  const key = JSON.stringify([(snap?.today || '').slice(0, 7), displayedGoals]);
+  if (key === lastMonthlyGoalsJson) return;
+  lastMonthlyGoalsJson = key;
+  resetGoalDeleteConfirmation();
+
+  const match = /^(\d{4})-(\d{2})/.exec(snap?.today || '');
+  els.monthlyGoalsSubtitle.textContent = match
+    ? `${match[1]} 年 ${Number(match[2])} 月 · 面板上勾选即可加入今日任务；这里的数字是本月总量。`
+    : '面板上勾选即可加入今日任务；这里的数字是本月总量。';
+  els.monthlyGoalsEmpty.hidden = goals.length > 0;
+
+  const activeIds = new Set(goals.map((goal) => goal.id));
+  for (const [id, row] of monthlyGoalRows) {
+    if (!activeIds.has(id)) {
+      row.remove();
+      monthlyGoalRows.delete(id);
+    }
+  }
+
+  for (const goal of goals) {
+    let row = monthlyGoalRows.get(goal.id);
+    if (!row) {
+      row = createGoalRow();
+      monthlyGoalRows.set(goal.id, row);
+      els.monthlyGoalsList.appendChild(row);
+    }
+    updateGoalRow(row, goal);
+  }
+}
+
+populateCategorySelect(els.monthlyGoalCategory, '学习');
+
+els.monthlyGoalAddForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = els.monthlyGoalTitle.value.trim();
+  const parsed = Number(els.monthlyGoalTarget.value);
+  if (!title) {
+    els.monthlyGoalTitle.focus();
+    return;
+  }
+  const monthTarget = Number.isFinite(parsed)
+    ? Math.max(1, Math.min(999, Math.floor(parsed)))
+    : 10;
+  const button = els.monthlyGoalAddForm.querySelector('button[type="submit"]');
+  button.disabled = true;
+  const ok = await runGoalCommand('add_goal', {
+    title,
+    category: els.monthlyGoalCategory.value,
+    monthTarget,
+  });
+  button.disabled = false;
+  if (!ok) return;
+  els.monthlyGoalTitle.value = '';
+  els.monthlyGoalCategory.value = '学习';
+  els.monthlyGoalTarget.value = '10';
+  els.monthlyGoalTitle.focus();
+});
 
 // —— 年度热力图(平移旧 refreshHeatmap:53 周 × 7 天,列=周,起点 52 周前的周日)——
 
@@ -643,15 +879,25 @@ async function refreshAll() {
   snap = (await invoke('get_state')) ?? MOCK_SNAP;
   renderSettings(snap.settings);
   renderSevenDays();
+  renderMonthlyGoals();
   await refreshBundle();
 }
 
 // —— mock(浏览器直开预览)——
 
 const MOCK_SNAP = {
+  today: '2026-01-07',
   settings: { chimeEnabled: true, whiteNoiseEnabled: true, lastMinuteEnabled: true,
     longBreakEnabled: true, longBreakEvery: 4, longBreakMinutes: 20,
     theme: 'monster', autoStartNextFocus: true },
+  monthlyGoals: [
+    { id: 'g1', title: '内参阅读', category: '学习', monthTarget: 30, monthDone: 12,
+      checkedToday: true, locked: true },
+    { id: 'g2', title: '内驱式学习', category: '学习', monthTarget: 40, monthDone: 18,
+      checkedToday: false, locked: false },
+    { id: 'g3', title: '网站建设完成', category: '工作', monthTarget: 20, monthDone: 5,
+      checkedToday: false, locked: false },
+  ],
   last7Days: [
     { date: '2026-01-01', completed: 3, rotten: 0 }, { date: '2026-01-02', completed: 6, rotten: 1 },
     { date: '2026-01-03', completed: 0, rotten: 0 }, { date: '2026-01-04', completed: 8, rotten: 0 },
@@ -678,13 +924,14 @@ const MOCK_BUNDLE = {
 // —— 启动 ——
 
 if (tauri) {
-  // 快照每秒广播;只有今日数据/设置变化时才重刷,避免热力图频繁重排
+  // 快照每秒广播;目标卡自己做 diff,热力图等重区域仍只在今日数据/设置变化时重刷。
   tauri.event.listen('state-update', (e) => {
     const next = e.payload;
+    snap = next;
+    renderMonthlyGoals();
     const key = JSON.stringify([next.todayStats, next.settings, next.tasksToday]);
     if (key !== lastTodayStatsJson) {
       lastTodayStatsJson = key;
-      snap = next;
       renderSettings(snap.settings);
       renderSevenDays();
       refreshBundle();
