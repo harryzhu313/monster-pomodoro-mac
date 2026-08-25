@@ -97,6 +97,35 @@
                aria-label="新增目标的本月番茄总量" title="本月番茄总量" />
         <button type="submit" class="btn-sm-primary monthly-goal-add-button">添加</button>
       </form>
+      <div class="monthly-goal-sync" id="monthly-goal-sync">
+        <div class="monthly-goal-sync-toolbar">
+          <div class="monthly-goal-sync-copy">
+            <span class="monthly-goal-sync-label">Notion 月度快照</span>
+            <strong class="monthly-goal-sync-month" id="monthly-goal-sync-month">
+              当前月份未就绪
+            </strong>
+          </div>
+          <button type="button" id="btn-monthly-goal-sync"
+                  class="btn-clear monthly-goal-sync-button"
+                  aria-describedby="monthly-goal-sync-status">
+            同步本月到 Notion
+          </button>
+        </div>
+        <div id="monthly-goal-sync-status" class="monthly-goal-sync-status is-idle"
+             role="status" aria-live="polite" aria-atomic="true">
+          <div class="monthly-goal-sync-headline" id="monthly-goal-sync-headline">
+            正在读取同步状态…
+          </div>
+          <div class="monthly-goal-sync-detail" id="monthly-goal-sync-detail"></div>
+        </div>
+        <div class="monthly-goal-sync-error-block" id="monthly-goal-sync-error-block" hidden>
+          <div class="monthly-goal-sync-errors-title" id="monthly-goal-sync-errors-title">
+            需要处理的项目
+          </div>
+          <ul class="monthly-goal-sync-errors" id="monthly-goal-sync-errors"
+              aria-labelledby="monthly-goal-sync-errors-title"></ul>
+        </div>
+      </div>
     </section>
 
     <section class="card history-card" id="history-card">

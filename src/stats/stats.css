@@ -439,6 +439,114 @@ button:disabled {
   text-align: center;
 }
 
+.monthly-goal-sync {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-hairline);
+}
+
+.monthly-goal-sync-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.monthly-goal-sync-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.monthly-goal-sync-label {
+  font: var(--text-caption);
+  color: var(--on-neutral);
+}
+
+.monthly-goal-sync-month {
+  font: var(--text-body);
+  font-size: 12px;
+}
+
+.monthly-goal-sync-button {
+  min-width: 148px;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.monthly-goal-sync-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.monthly-goal-sync-button.is-loading {
+  opacity: 0.78;
+  cursor: wait;
+}
+
+.monthly-goal-sync-status {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--rounded-md);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  font: var(--text-caption);
+}
+
+.monthly-goal-sync-status.is-loading {
+  border-color: var(--primary);
+}
+
+.monthly-goal-sync-status.is-success {
+  border-color: var(--success);
+}
+
+.monthly-goal-sync-status.is-partial {
+  border-color: var(--warning);
+}
+
+.monthly-goal-sync-status.is-error {
+  border-color: var(--error);
+}
+
+.monthly-goal-sync-headline {
+  color: var(--on-neutral);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.monthly-goal-sync-detail {
+  margin-top: 2px;
+  color: var(--on-neutral);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.monthly-goal-sync-error-block {
+  margin-top: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--error);
+  border-radius: var(--rounded-md);
+  background: var(--surface-card);
+  color: var(--on-neutral);
+  font: var(--text-caption);
+}
+
+.monthly-goal-sync-errors-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.monthly-goal-sync-errors {
+  margin-top: var(--space-xs);
+  padding-left: var(--space-lg);
+  color: var(--on-neutral);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* —— 历史明细 —— */
 
 .history-title-actions {

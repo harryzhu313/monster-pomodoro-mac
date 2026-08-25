@@ -734,11 +734,20 @@ async function finalizeMonthlyGoalSummary(month, summary) {
   return Object.freeze(summary);
 }
 
+function reportMonthlyGoalSyncStage(options, stage) {
+  try {
+    const result = options?.onStage?.(stage);
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch {
+    // 过程提示只服务 UI；不得反向影响预检或远端写入结果。
+  }
+}
+
 /**
  * Phase 03 月度目标幂等同步核心。snapshot 必须是同一次 Rust get_state 的结果。
- * 真实 UI 接线留到 Phase 04；本函数可直接用 mock HTTP 验证完整写入编排。
+ * options.onStage 只接收 validating / syncing，回调异常不会打断同步。
  */
-export async function syncMonthlyGoals(snapshot, configSnapshot = null) {
+export async function syncMonthlyGoals(snapshot, configSnapshot = null, options = null) {
   const payload = freezeGoalSyncSnapshot(snapshot);
   const config = await connectionConfig(configSnapshot);
 
@@ -755,6 +764,7 @@ export async function syncMonthlyGoals(snapshot, configSnapshot = null) {
     });
   }
 
+  reportMonthlyGoalSyncStage(options, 'validating');
   const preflight = await preflightGoalSync(payload.today, config);
   let remotePages;
   try {
@@ -764,6 +774,7 @@ export async function syncMonthlyGoals(snapshot, configSnapshot = null) {
     throw accessError('月度目标', error);
   }
 
+  reportMonthlyGoalSyncStage(options, 'syncing');
   const remoteByKey = buildRemoteGoalIndex(remotePages, preflight.monthPageId);
   const localIdCounts = countLocalGoalIds(payload.goals);
   const errors = [];

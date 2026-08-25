@@ -3,6 +3,13 @@
 // 设置改动 → update_settings command;历史完成态 → set_history_task_done。
 
 import * as notion from './notion.js';
+import {
+  buildMonthlyGoalSyncView,
+  createLatestSuccessGate,
+  createMutationTracker,
+  createSingleFlight,
+  monthlyGoalRowsRenderKey,
+} from './goal-sync-ui.js';
 import { CATEGORY_VALUES, normalizeCategory } from '../shared/util.js';
 
 const tauri = window.__TAURI__ ?? null;
@@ -47,6 +54,13 @@ const els = {
   monthlyGoalTitle: document.getElementById('monthly-goal-title'),
   monthlyGoalCategory: document.getElementById('monthly-goal-category'),
   monthlyGoalTarget: document.getElementById('monthly-goal-target'),
+  monthlyGoalSyncMonth: document.getElementById('monthly-goal-sync-month'),
+  btnMonthlyGoalSync: document.getElementById('btn-monthly-goal-sync'),
+  monthlyGoalSyncStatus: document.getElementById('monthly-goal-sync-status'),
+  monthlyGoalSyncHeadline: document.getElementById('monthly-goal-sync-headline'),
+  monthlyGoalSyncDetail: document.getElementById('monthly-goal-sync-detail'),
+  monthlyGoalSyncErrorBlock: document.getElementById('monthly-goal-sync-error-block'),
+  monthlyGoalSyncErrors: document.getElementById('monthly-goal-sync-errors'),
   historyList: document.getElementById('history-list'),
   historyCard: document.getElementById('history-card'),
   historyPanel: document.getElementById('history-panel'),
@@ -87,6 +101,13 @@ let lastMonthlyGoalsJson = '';
 const monthlyGoalRows = new Map();
 let pendingGoalDelete = null;
 let goalDeleteTimer = null;
+const goalMutationTracker = createMutationTracker();
+let notionConfigReady = false;
+let monthlyGoalSyncRunning = false;
+let monthlyGoalSyncStage = 'validating';
+let monthlyGoalSyncAttempt = null;
+let lastMonthlyGoalSyncViewJson = '';
+const statsBundleRefreshGate = createLatestSuccessGate();
 
 // —— 设置区(平移旧 renderSettings/patchSettings)——
 
@@ -274,17 +295,20 @@ function resetGoalDeleteConfirmation() {
   pendingGoalDelete = null;
 }
 
-async function runGoalCommand(command, args) {
-  try {
-    await invoke(command, args);
-    return true;
-  } catch (e) {
-    await messageDialog(`月度目标保存失败:${String(e.message || e)}`);
-    // 命令失败时用最后一份 Rust 快照还原表单。
-    lastMonthlyGoalsJson = '';
-    renderMonthlyGoals();
-    return false;
-  }
+function runGoalCommand(command, args) {
+  const operation = (async () => {
+    try {
+      await invoke(command, args);
+      return true;
+    } catch (e) {
+      await messageDialog(`月度目标保存失败:${String(e.message || e)}`);
+      // 命令失败时用最后一份 Rust 快照还原表单。
+      lastMonthlyGoalsJson = '';
+      renderMonthlyGoals();
+      return false;
+    }
+  })();
+  return goalMutationTracker.track(operation);
 }
 
 function updateGoal(id, patch) {
@@ -407,16 +431,56 @@ function updateGoalRow(row, goal) {
   deleteButton.setAttribute('aria-label', row.monthlyGoalDeleteTitle);
 }
 
+function renderMonthlyGoalSync() {
+  const goals = Array.isArray(snap?.monthlyGoals) ? snap.monthlyGoals : [];
+  const config = readNotionConfigForm();
+  const view = buildMonthlyGoalSyncView({
+    today: snap?.today,
+    goalCount: goals.length,
+    configReady: notionConfigReady,
+    configured: !!config.token && !!config.goalDbId,
+    syncing: monthlyGoalSyncRunning,
+    syncStage: monthlyGoalSyncStage,
+    syncMonth: monthlyGoalSyncAttempt?.month,
+    attempt: monthlyGoalSyncAttempt,
+    exportLog: bundle?.notionExportLog,
+  });
+  const viewJson = JSON.stringify(view);
+  if (viewJson === lastMonthlyGoalSyncViewJson) return;
+  lastMonthlyGoalSyncViewJson = viewJson;
+
+  els.monthlyGoalSyncMonth.textContent = view.monthLabel;
+  els.btnMonthlyGoalSync.disabled = view.buttonDisabled;
+  els.btnMonthlyGoalSync.textContent = view.buttonText;
+  els.btnMonthlyGoalSync.title = view.buttonTitle;
+  els.btnMonthlyGoalSync.classList.toggle('is-loading', monthlyGoalSyncRunning);
+  els.btnMonthlyGoalSync.setAttribute('aria-busy', String(monthlyGoalSyncRunning));
+
+  els.monthlyGoalSyncStatus.className = `monthly-goal-sync-status is-${view.kind}`;
+  els.monthlyGoalSyncStatus.setAttribute('aria-busy', String(monthlyGoalSyncRunning));
+  els.monthlyGoalSyncHeadline.textContent = view.headline;
+  els.monthlyGoalSyncDetail.textContent = view.detail;
+  els.monthlyGoalSyncErrors.replaceChildren();
+  for (const error of view.errors) {
+    const item = document.createElement('li');
+    item.textContent = error;
+    els.monthlyGoalSyncErrors.appendChild(item);
+  }
+  els.monthlyGoalSyncErrorBlock.hidden = view.errors.length === 0;
+  els.btnMonthlyGoalSync.setAttribute(
+    'aria-describedby',
+    view.errors.length > 0
+      ? 'monthly-goal-sync-status monthly-goal-sync-error-block'
+      : 'monthly-goal-sync-status'
+  );
+}
+
 function renderMonthlyGoals() {
   const goals = Array.isArray(snap?.monthlyGoals) ? snap.monthlyGoals : [];
+  // 同步状态区与目标表单分开更新；不得为状态变化重建正在编辑的行。
+  renderMonthlyGoalSync();
   // 管理卡不展示进度/今日勾选态，这些字段变化时不碰表单 DOM。
-  const displayedGoals = goals.map((goal) => [
-    goal.id,
-    goal.title,
-    normalizeCategory(goal.category),
-    goal.monthTarget,
-  ]);
-  const key = JSON.stringify([(snap?.today || '').slice(0, 7), displayedGoals]);
+  const key = monthlyGoalRowsRenderKey(snap);
   if (key === lastMonthlyGoalsJson) return;
   lastMonthlyGoalsJson = key;
   resetGoalDeleteConfirmation();
@@ -472,6 +536,85 @@ els.monthlyGoalAddForm.addEventListener('submit', async (e) => {
   els.monthlyGoalCategory.value = '学习';
   els.monthlyGoalTarget.value = '10';
   els.monthlyGoalTitle.focus();
+});
+
+function blurActiveGoalEditor() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.closest('.monthly-goal-row')) active.blur();
+}
+
+async function executeMonthlyGoalSync() {
+  const configSnapshot = Object.freeze(readNotionConfigForm());
+  const visibleSnapshot = snap ?? MOCK_SNAP;
+  const visibleGoals = Array.isArray(visibleSnapshot?.monthlyGoals)
+    ? visibleSnapshot.monthlyGoals
+    : [];
+  const visibleMonth = /^\d{4}-\d{2}-\d{2}$/.test(visibleSnapshot?.today || '')
+    ? visibleSnapshot.today.slice(0, 7)
+    : '';
+  if (!configSnapshot.token || !configSnapshot.goalDbId || visibleGoals.length === 0 || !visibleMonth) {
+    renderMonthlyGoalSync();
+    return null;
+  }
+
+  monthlyGoalSyncRunning = true;
+  monthlyGoalSyncStage = 'validating';
+  monthlyGoalSyncAttempt = { kind: 'loading', month: visibleMonth };
+  // 程序化触发时浏览器不会自动失焦；先提交已聚焦目标的 change。
+  blurActiveGoalEditor();
+  renderMonthlyGoalSync();
+
+  try {
+    // change 监听会同步注册保存 Promise；只等待点击前已触发的目标变更。
+    await Promise.resolve();
+    const mutationResults = await goalMutationTracker.settleCurrent();
+    if (mutationResults.some((ok) => !ok)) {
+      throw new Error('有月度目标尚未保存成功，请先修正表单后再同步');
+    }
+    // 先持久化点击这一刻的表单配置，再全程显式传递同一冻结副本。
+    await notion.setNotionConfig(configSnapshot);
+    const stateSnapshot = (await invoke('get_state')) ?? snap ?? MOCK_SNAP;
+    snap = stateSnapshot;
+    const snapshotMonth = String(stateSnapshot?.today || '').slice(0, 7);
+    monthlyGoalSyncAttempt = { kind: 'loading', month: snapshotMonth };
+    renderMonthlyGoals();
+
+    const result = await notion.syncMonthlyGoals(stateSnapshot, configSnapshot, {
+      onStage(stage) {
+        if (stage !== 'validating' && stage !== 'syncing') return;
+        monthlyGoalSyncStage = stage;
+        renderMonthlyGoalSync();
+      },
+    });
+    monthlyGoalSyncAttempt = {
+      kind: 'result',
+      month: result.month || snapshotMonth,
+      summary: result,
+    };
+    // 最近摘要由 StatsBundle 提供；刷新失败不能覆盖已经完成的远端结果。
+    try {
+      await refreshBundle();
+    } catch {
+      // 本次内存结果仍会显示；下次打开窗口会重新读取持久化摘要。
+    }
+    return result;
+  } catch (error) {
+    monthlyGoalSyncAttempt = {
+      kind: 'error',
+      month: monthlyGoalSyncAttempt?.month || visibleMonth,
+      message: String(error?.message || error),
+    };
+    return null;
+  } finally {
+    monthlyGoalSyncRunning = false;
+    monthlyGoalSyncStage = 'validating';
+    renderMonthlyGoalSync();
+  }
+}
+
+const runMonthlyGoalSync = createSingleFlight(executeMonthlyGoalSync);
+els.btnMonthlyGoalSync.addEventListener('click', () => {
+  void runMonthlyGoalSync();
 });
 
 // —— 年度热力图(平移旧 refreshHeatmap:53 周 × 7 天,列=周,起点 52 周前的周日)——
@@ -859,11 +1002,22 @@ function notionStatusesForField(key) {
 }
 
 async function loadNotionConfig() {
-  const cfg = await notion.getNotionConfig();
-  els.notionToken.value = cfg.token || '';
-  els.notionTaskDb.value = cfg.taskDbId || '';
-  els.notionDayDb.value = cfg.dayDbId || '';
-  els.notionGoalDb.value = cfg.goalDbId || '';
+  try {
+    const cfg = await notion.getNotionConfig();
+    els.notionToken.value = cfg.token || '';
+    els.notionTaskDb.value = cfg.taskDbId || '';
+    els.notionDayDb.value = cfg.dayDbId || '';
+    els.notionGoalDb.value = cfg.goalDbId || '';
+  } catch (error) {
+    setNotionStatus(
+      els.notionGoalStatus,
+      'error',
+      `✗ 无法读取本机 Notion 配置：${String(error?.message || error)}`
+    );
+  } finally {
+    notionConfigReady = true;
+    renderMonthlyGoalSync();
+  }
 }
 
 function readNotionConfigForm() {
@@ -896,6 +1050,7 @@ for (const [el, key] of notionConfigFields) {
         clearNotionStatus(status);
       }
     }
+    renderMonthlyGoalSync();
   });
   el.addEventListener('blur', () => {
     saveNotionField(key, el).catch((e) => {
@@ -964,10 +1119,15 @@ els.btnNotionGoalTest.addEventListener('click', () => {
 // —— 刷新编排 ——
 
 async function refreshBundle() {
-  bundle = (await invoke('get_stats_bundle')) ?? MOCK_BUNDLE;
+  const requestRevision = statsBundleRefreshGate.issue();
+  const nextBundle = (await invoke('get_stats_bundle')) ?? MOCK_BUNDLE;
+  if (!statsBundleRefreshGate.accept(requestRevision)) return false;
+  bundle = nextBundle;
   renderBadges();
   renderHeatmap();
   renderHistory();
+  renderMonthlyGoalSync();
+  return true;
 }
 
 async function refreshAll() {

@@ -687,7 +687,10 @@ test('missing or invalid Rust snapshot dates fail locally without an HTTP reques
 });
 
 test('monthly sync returns an explicit empty result before every Notion request', async () => {
-  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [] }));
+  const stages = [];
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [] }), null, {
+    onStage: (stage) => stages.push(stage),
+  });
 
   assert.deepEqual(result, {
     ok: true,
@@ -699,6 +702,7 @@ test('monthly sync returns an explicit empty result before every Notion request'
     total: 0,
     errors: [],
   });
+  assert.deepEqual(stages, []);
   assert.equal(requests.length, 0);
   assert.deepEqual(invokeCalls, [
     { cmd: 'get_notion_config', args: undefined },
@@ -716,18 +720,60 @@ test('monthly sync keeps preflight failures at zero writes and preserves the pri
   const invalidGoalDatabase = goalDatabase();
   delete invalidGoalDatabase.properties.分类;
   installGoalSyncHandler({ goal: invalidGoalDatabase });
+  const stages = [];
 
   await assert.rejects(
-    notion.syncMonthlyGoals(syncSnapshot()),
+    notion.syncMonthlyGoals(syncSnapshot(), null, {
+      onStage: (stage) => stages.push(stage),
+    }),
     (error) => error?.code === 'property_schema' && /分类/.test(error.message)
   );
 
+  assert.deepEqual(stages, ['validating']);
   assert.deepEqual(
     requests.map(({ url, init }) => [init.method || 'GET', new URL(url).pathname]),
     [['GET', `/v1/databases/${IDS.goalDb}`]]
   );
   assert.equal(requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')), false);
   assert.deepEqual(invokeCalls.map(({ cmd }) => cmd), ['get_notion_config']);
+});
+
+test('monthly sync reports validation before writing and ignores UI callback failures', async () => {
+  installGoalSyncHandler();
+  const stages = [];
+  const requestSnapshots = [];
+  const result = await notion.syncMonthlyGoals(syncSnapshot(), null, {
+    onStage(stage) {
+      stages.push(stage);
+      requestSnapshots.push(requests.map(({ url, init }) => [
+        init.method || 'GET',
+        new URL(url).pathname,
+      ]));
+      if (stage === 'validating') throw new Error('UI render failed');
+      return Promise.reject(new Error('async UI render failed'));
+    },
+  });
+
+  assert.equal(result.created, 1);
+  assert.deepEqual(stages, ['validating', 'syncing']);
+  assert.deepEqual(requestSnapshots[0], []);
+  assert.equal(
+    requestSnapshots[1].some(([method, path]) => (
+      method === 'POST' && path === `/v1/databases/${IDS.goalDb}/query`
+    )),
+    true
+  );
+  assert.equal(
+    requestSnapshots[1].some(([, path]) => path.startsWith('/v1/pages')),
+    false
+  );
+  const firstWrite = requests.findIndex(({ url, init }) => (
+    new URL(url).pathname === '/v1/pages' && init.method === 'POST'
+  ));
+  const goalQuery = requests.findIndex(({ url }) => (
+    new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`
+  ));
+  assert.equal(goalQuery < firstWrite, true);
 });
 
 test('monthly sync creates all six properties from one frozen Rust snapshot and config', async () => {

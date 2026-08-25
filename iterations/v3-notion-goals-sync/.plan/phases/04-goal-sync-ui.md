@@ -1,6 +1,6 @@
 # Phase 04 — 月度目标同步 UI 与真实闭环
 
-**Status**: `not started`
+**Status**: `completed`
 **目标**: 用户可在月度目标卡一键同步当前月，并在真实 Notion 中安全完成首次新增与后续更新
 **前置**: Phase 03 已验收并提交；App 中已填写月度目标 DB ID，所用 Integration 可访问目标库和时间框架
 
@@ -17,13 +17,19 @@
 
 ## Tasks
 
-- [ ] 在月度目标卡增加当前月份、同步按钮、状态区和最近一次摘要，位置与文案遵循 PRD
-- [ ] 使用现有 DESIGN token 完成 normal / hover / disabled / loading / success / partial / error 状态，不引入新视觉体系
-- [ ] 将 Phase 02 预检和 Phase 03 同步核心接入按钮，保证一次操作使用冻结的 Rust 快照与 Notion 配置
-- [ ] 防止并发触发，并在状态刷新时复用既有目标表单 DOM，保护输入焦点和未提交草稿
-- [ ] 在真实 Notion 执行首次新增、无变更重同步、字段变更重同步三轮验收，逐项核对六字段、relation 和零重复
-- [ ] 验证失败反馈不影响本地目标增删改、番茄计时或休息状态，并记录不含 Token / DB ID / 用户任务标题的 evidence
-- [ ] 运行 JS 测试、Rust 测试、语法与样式检查，整理用户 5 分钟内可完成的验收步骤
+- [x] 在月度目标卡增加当前月份、同步按钮、状态区和最近一次摘要，位置与文案遵循 PRD（`src/stats/stats.html:100-128`，`src/stats/stats.js:434-476`）
+- [x] 使用现有 DESIGN token 完成 normal / hover / disabled / loading / success / partial / error 状态，不引入新视觉体系（`src/stats/stats.css:442-548`）
+- [x] 将 Phase 02 预检和 Phase 03 同步核心接入按钮，保证一次操作使用冻结的 Rust 快照与 Notion 配置（`src/stats/stats.js:546-618`，`src/stats/notion.js:741-842`）
+- [x] 防止并发触发，并在状态刷新时复用既有目标表单 DOM，保护输入焦点和未提交草稿（`src/stats/stats.js:293-310,478-510,541-617`，`src/stats/goal-sync-ui.test.mjs:164-260`）
+- [x] 在真实 Notion 执行首次新增、无变更重同步、字段变更重同步三轮验收，逐项核对六字段、relation 和零重复（用户于 2026-08-25 确认验收通过；自动化契约见 `src/stats/notion.test.mjs:779-906`）
+- [x] 验证失败反馈不影响本地目标增删改、番茄计时或休息状态，并记录不含 Token / DB ID / 用户任务标题的 evidence（用户于 2026-08-25 确认验收通过；零写入与阶段隔离见 `src/stats/notion.test.mjs:689-777`）
+- [x] 运行 JS 测试、Rust 测试、语法与样式检查，整理用户 5 分钟内可完成的验收步骤（`node --test src/stats/goal-sync-ui.test.mjs src/stats/notion.test.mjs`：41/41；`cargo test --manifest-path src-tauri/Cargo.toml`：44/44；ES module 语法检查与 `git diff --check` 通过）
+
+## Evidence
+
+- 2026-08-25：Node 自动化 `41/41`、Rust 自动化 `44/44` 通过；三个前端 ES module 语法检查与 `git diff --check` 通过。
+- 空目标零 Notion 请求、预检失败零写入、六字段 payload、复合键更新、分页、部分失败、single-flight、保存等待、跨月过程月份、最近安全摘要与并发刷新均有自动化覆盖。
+- 2026-08-25：用户以“验收通过”确认真实 Notion 闭环与失败隔离；用户未提供细分计数，因此本文不推断或补写具体新增 / 更新 / 失败数量。
 
 ## Notes
 
