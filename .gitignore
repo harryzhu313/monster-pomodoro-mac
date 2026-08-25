@@ -11,6 +11,9 @@ dist/
 
 # 本地数据与密钥(Notion token 只存 app data dir,不应出现在仓库)
 *.local.json
+tomato-monster-backup-*.json
+store.json
+store.json.*
 .env
 .env.*
 !.env.example

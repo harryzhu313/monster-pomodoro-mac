@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -116,7 +116,9 @@ pub struct StatEntry {
 impl<'de> Deserialize<'de> for StatEntry {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         fn as_u32(v: Option<&Value>) -> u32 {
-            v.and_then(Value::as_f64).map(|n| n.max(0.0) as u32).unwrap_or(0)
+            v.and_then(Value::as_f64)
+                .map(|n| n.max(0.0) as u32)
+                .unwrap_or(0)
         }
         let v = Value::deserialize(d)?;
         Ok(match &v {
@@ -263,11 +265,16 @@ pub struct Store {
 impl Store {
     /// 读失败不覆盖原文件:损坏的 store.json 侧移为 .corrupt 保留现场,再用默认值起步
     pub fn load(path: PathBuf) -> Store {
+        let mut sanitized_legacy_log = false;
         let data = match fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<StoreData>(&text) {
                 Ok(mut data) => {
                     // 引导标记是后加字段:既有安装(文件已存在)视为不需要引导
                     data.onboarding_done = true;
+                    // 旧版本曾把每日导出的详细错误写入日志；加载时即收窄到安全统计字段。
+                    let safe_log = sanitize_notion_export_log(&data.notion_export_log);
+                    sanitized_legacy_log = safe_log != data.notion_export_log;
+                    data.notion_export_log = safe_log;
                     data
                 }
                 Err(e) => {
@@ -278,7 +285,14 @@ impl Store {
             },
             Err(_) => StoreData::default(),
         };
-        Store { path, data }
+        let store = Store { path, data };
+        if sanitized_legacy_log {
+            // best-effort 原子迁移；失败只保留旧的 0600 文件，不影响 App 启动。
+            if let Err(error) = store.save() {
+                eprintln!("store: 清理旧 Notion 导出日志失败({error})");
+            }
+        }
+        store
     }
 
     /// 原子写:临时文件(权限 600)+ rename
@@ -289,12 +303,24 @@ impl Store {
         let tmp = self.path.with_extension("json.tmp");
         let text = serde_json::to_string_pretty(&self.data)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        fs::write(&tmp, text)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+            // mode 只影响新建文件；旧的残留 tmp 也要在写入敏感内容前先收窄。
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
         }
+        file.set_len(0)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         fs::rename(&tmp, &self.path)
     }
 
@@ -323,6 +349,57 @@ const SUPPORTED_BACKUP_VERSIONS: [u64; 3] = [1, 2, BACKUP_SCHEMA_VERSION];
 /// settings 里浏览器特有项,导入时丢弃(ARCHITECTURE §4)
 const BROWSER_ONLY_SETTINGS: [&str; 1] = ["lockscreenBg"];
 
+/// Notion 导出日志会进入本地备份，只保留历史列表和状态提示真正消费的安全统计字段。
+/// 当下 UI 仍可使用导出 command 的完整返回值展示首个错误，但任务标题、远端错误和配置
+/// 都不得进入持久化日志。
+pub fn sanitize_notion_export_entry(date: &str, value: &Value) -> Value {
+    let Some(source) = value.as_object() else {
+        return Value::Object(Map::new());
+    };
+    let mut safe = Map::new();
+
+    if let Some(at) = source.get("at").and_then(Value::as_str) {
+        safe.insert("at".into(), Value::String(at.to_string()));
+    }
+
+    let count_keys: &[&str] = if date.starts_with("monthly:") {
+        &["created", "updated", "failed"]
+    } else {
+        &[
+            "created",
+            "updated",
+            "failed",
+            "total",
+            "existingDuplicates",
+        ]
+    };
+    for key in count_keys {
+        if let Some(number) = source.get(*key).and_then(Value::as_u64) {
+            safe.insert((*key).into(), Value::Number(number.into()));
+        }
+    }
+
+    if !date.starts_with("monthly:") {
+        for key in ["ok", "dayPageLinked"] {
+            if let Some(boolean) = source.get(key).and_then(Value::as_bool) {
+                safe.insert(key.into(), Value::Bool(boolean));
+            }
+        }
+    }
+
+    Value::Object(safe)
+}
+
+pub fn sanitize_notion_export_log(log: &Map<String, Value>) -> Map<String, Value> {
+    log.iter()
+        .filter_map(|(date, entry)| {
+            entry
+                .as_object()
+                .map(|_| (date.clone(), sanitize_notion_export_entry(date, entry)))
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportOutcome {
@@ -333,6 +410,7 @@ pub struct ImportOutcome {
 }
 
 pub fn export_backup_json(data: &StoreData, app_version: &str) -> String {
+    let notion_export_log = sanitize_notion_export_log(&data.notion_export_log);
     let payload = serde_json::json!({
         "schemaVersion": BACKUP_SCHEMA_VERSION,
         "exportedAt": chrono::Local::now().to_rfc3339(),
@@ -345,7 +423,7 @@ pub fn export_backup_json(data: &StoreData, app_version: &str) -> String {
             "monthlyGoals": data.monthly_goals,
             "settings": data.settings,
             "lastCategory": data.last_category,
-            "notionExportLog": data.notion_export_log,
+            "notionExportLog": notion_export_log,
         }
     });
     serde_json::to_string_pretty(&payload).unwrap_or_default()
@@ -359,7 +437,10 @@ pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
     let payload: Value =
         serde_json::from_str(text).map_err(|_| "备份文件不是有效的 JSON".to_string())?;
     let obj = payload.as_object().ok_or("备份文件不是有效的 JSON 对象")?;
-    let version = obj.get("schemaVersion").and_then(Value::as_u64).unwrap_or(0);
+    let version = obj
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if !SUPPORTED_BACKUP_VERSIONS.contains(&version) {
         return Err(format!("不支持的备份版本:{version}"));
     }
@@ -419,8 +500,8 @@ pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
                     m.remove(key);
                 }
             }
-            next.settings = serde_json::from_value(v)
-                .map_err(|e| format!("settings 字段格式无效({e})"))?;
+            next.settings =
+                serde_json::from_value(v).map_err(|e| format!("settings 字段格式无效({e})"))?;
             apply(true);
         }
     }
@@ -436,7 +517,7 @@ pub fn import_backup(data: &mut StoreData, text: &str) -> Result<u32, String> {
 
     let export_log = parse_key::<Map<String, Value>>(d, "notionExportLog", "notionExportLog")?;
     apply(export_log.is_some());
-    next.notion_export_log = export_log.unwrap_or_default();
+    next.notion_export_log = sanitize_notion_export_log(&export_log.unwrap_or_default());
 
     if !applied {
         return Err("备份文件里没有可恢复的数据".to_string());
@@ -453,9 +534,10 @@ mod tests {
 
     #[test]
     fn stat_entry_normalizes_legacy_number() {
-        let stats: BTreeMap<String, StatEntry> =
-            serde_json::from_str(r#"{"2026-07-01": 5, "2026-07-02": {"completed": 3, "rotten": 1}}"#)
-                .unwrap();
+        let stats: BTreeMap<String, StatEntry> = serde_json::from_str(
+            r#"{"2026-07-01": 5, "2026-07-02": {"completed": 3, "rotten": 1}}"#,
+        )
+        .unwrap();
         assert_eq!(stats["2026-07-01"].completed, 5);
         assert_eq!(stats["2026-07-01"].rotten, 0);
         assert_eq!(stats["2026-07-02"].completed, 3);
@@ -466,9 +548,18 @@ mod tests {
     fn store_data_uses_legacy_top_level_keys() {
         let v = serde_json::to_value(StoreData::default()).unwrap();
         for key in [
-            "timerState", "quotaState", "settings", "stats", "tasksToday",
-            "tasksArchive", "badgesState", "monthlyGoals", "lastCategory",
-            "notionExportLog", "notionConfig", "onboardingDone",
+            "timerState",
+            "quotaState",
+            "settings",
+            "stats",
+            "tasksToday",
+            "tasksArchive",
+            "badgesState",
+            "monthlyGoals",
+            "lastCategory",
+            "notionExportLog",
+            "notionConfig",
+            "onboardingDone",
         ] {
             assert!(v.get(key).is_some(), "missing key {key}");
         }
@@ -539,14 +630,24 @@ mod tests {
 
         for (name, text) in [
             ("损坏 JSON", "{not json"),
-            ("版本不对", r#"{"schemaVersion": 99, "data": {"stats": {}}}"#),
+            (
+                "版本不对",
+                r#"{"schemaVersion": 99, "data": {"stats": {}}}"#,
+            ),
             ("缺 data", r#"{"schemaVersion": 1}"#),
             ("空 data", r#"{"schemaVersion": 1, "data": {}}"#),
-            ("stats 类型错", r#"{"schemaVersion": 1, "data": {"stats": "oops"}}"#),
+            (
+                "stats 类型错",
+                r#"{"schemaVersion": 1, "data": {"stats": "oops"}}"#,
+            ),
         ] {
             let r = import_backup(&mut d, text);
             assert!(r.is_err(), "{name} 应该被拒绝");
-            assert_eq!(serde_json::to_string(&d).unwrap(), before, "{name} 不得改动数据");
+            assert_eq!(
+                serde_json::to_string(&d).unwrap(),
+                before,
+                "{name} 不得改动数据"
+            );
         }
     }
 
@@ -580,6 +681,159 @@ mod tests {
         ] {
             assert!(!exported.contains(sensitive_value));
         }
+    }
+
+    #[test]
+    fn notion_export_log_is_sanitized_on_load_import_and_backup_export() {
+        let marker = "should-not-persist";
+        let mut d = StoreData::default();
+        d.notion_export_log.insert(
+            "2026-08-25".into(),
+            serde_json::json!({
+                "at": "2026-08-25T10:00:00+08:00",
+                "ok": false,
+                "created": 1,
+                "updated": 0,
+                "failed": 1,
+                "total": 2,
+                "existingDuplicates": 0,
+                "dayPageLinked": true,
+                "errors": [{ "task": marker, "error": marker }],
+                "request": marker
+            }),
+        );
+        d.notion_export_log.insert(
+            "monthly:2026-08".into(),
+            serde_json::json!({
+                "at": "2026-08-25T11:00:00+08:00",
+                "created": 2,
+                "updated": 3,
+                "failed": 0,
+                "token": marker,
+                "databaseId": marker
+            }),
+        );
+
+        let exported = export_backup_json(&d, "0.2.0");
+        assert!(!exported.contains(marker));
+        let exported_json: Value = serde_json::from_str(&exported).unwrap();
+        let daily = &exported_json["data"]["notionExportLog"]["2026-08-25"];
+        assert_eq!(daily["ok"], false);
+        assert_eq!(daily["created"], 1);
+        assert_eq!(daily["dayPageLinked"], true);
+        assert!(daily.get("errors").is_none());
+        let monthly = &exported_json["data"]["notionExportLog"]["monthly:2026-08"];
+        assert_eq!(monthly["updated"], 3);
+        assert!(monthly.get("token").is_none());
+
+        let mut imported = StoreData::default();
+        import_backup(&mut imported, &exported).unwrap();
+        assert!(!serde_json::to_string(&imported.notion_export_log)
+            .unwrap()
+            .contains(marker));
+
+        // 模拟旧版 store.json：磁盘可含历史详细错误，加载到内存时必须立即收窄。
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tomato-monster-log-sanitize-{}-{unique}.json",
+            std::process::id()
+        ));
+        let legacy_store = Store {
+            path: path.clone(),
+            data: d,
+        };
+        legacy_store.save().unwrap();
+        let loaded = Store::load(path.clone());
+        assert!(!serde_json::to_string(&loaded.data.notion_export_log)
+            .unwrap()
+            .contains(marker));
+        assert!(!std::fs::read_to_string(&path).unwrap().contains(marker));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn goal_and_full_timer_cycle_survive_store_round_trip() {
+        use crate::timer::{self, Durations};
+
+        let today = "2026-08-25";
+        let now = 1_000_000;
+        let durations = Durations {
+            focus_ms: 1_000,
+            break_ms: 500,
+            last_minute_ms: 100,
+            test_mode: true,
+        };
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tomato-monster-full-cycle-{}-{unique}.json",
+            std::process::id()
+        ));
+        let mut store = Store {
+            path: path.clone(),
+            data: StoreData::default(),
+        };
+
+        timer::add_goal(
+            &mut store.data,
+            now,
+            "fixture goal",
+            Some("学习".into()),
+            10.0,
+        );
+        let goal_id = store.data.monthly_goals[0].id.clone();
+        timer::update_goal(
+            &mut store.data,
+            &goal_id,
+            Some("fixture goal updated".into()),
+            None,
+            Some(12.0),
+        );
+        let toggled = timer::toggle_goal_today(&mut store.data, today, now + 1, &goal_id);
+        assert!(toggled.ok && toggled.checked);
+
+        timer::start_focus(&mut store.data, now, &durations);
+        timer::handle_phase_end_if_due(
+            &mut store.data,
+            now + durations.focus_ms,
+            today,
+            &durations,
+        );
+        assert_eq!(store.data.timer_state.state, TimerPhase::Breaking);
+        assert_eq!(store.data.stats[today].completed, 1);
+        assert_eq!(store.data.tasks_today.tasks[0].used, 1);
+        assert_eq!(timer::goal_views(&store.data, today)[0].month_done, 1);
+
+        // 强制休息中，普通 reset 仍必须无效。
+        timer::reset(&mut store.data, false);
+        assert_eq!(store.data.timer_state.state, TimerPhase::Breaking);
+        store.save().unwrap();
+
+        let mut loaded = Store::load(path.clone());
+        assert_eq!(loaded.data.timer_state.state, TimerPhase::Breaking);
+        assert_eq!(loaded.data.stats[today].completed, 1);
+        assert_eq!(loaded.data.tasks_today.tasks[0].used, 1);
+        let break_end = loaded.data.timer_state.end_time.unwrap();
+        timer::handle_phase_end_if_due(&mut loaded.data, break_end, today, &durations);
+        assert_eq!(loaded.data.timer_state.state, TimerPhase::Focusing);
+
+        // 删除本地目标只移除目标本身，已经产生并完成的任务仍保留。
+        timer::delete_goal(&mut loaded.data, &goal_id);
+        assert!(loaded.data.monthly_goals.is_empty());
+        assert_eq!(loaded.data.tasks_today.tasks.len(), 1);
+        assert_eq!(loaded.data.tasks_today.tasks[0].used, 1);
+        loaded.save().unwrap();
+
+        let reloaded = Store::load(path.clone());
+        assert_eq!(reloaded.data.timer_state.state, TimerPhase::Focusing);
+        assert_eq!(reloaded.data.stats[today].completed, 1);
+        assert_eq!(reloaded.data.tasks_today.tasks.len(), 1);
+        std::fs::remove_file(path).unwrap();
     }
 
     /// 备份版本升到 3 之后,v1/v2 的老备份仍必须能导入(加键是向后兼容的)
@@ -728,6 +982,15 @@ mod tests {
                 goal_db_id: Some("goal".into()),
             })
             .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
 
         let loaded = Store::load(path.clone());
         assert_eq!(loaded.data.notion_config.token, "token");

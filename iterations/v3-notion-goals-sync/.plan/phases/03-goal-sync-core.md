@@ -24,7 +24,7 @@
 - [x] 在同步入口冻结 Notion 配置和 Rust 目标快照，禁止循环中再次读取可变配置或系统日期（`src/stats/notion.js:549-574,741-761`）
 - [x] 将最近一次月度摘要写入 `notionExportLog` 的月份命名空间，并保证摘要记录失败不会把已完成的远端写入误报为整体失败（`src/stats/notion.js:717-735`）
 - [x] 使用可注入 mock fetch 编写无新依赖的 JS 单元测试，覆盖验收判据中的所有分支（`src/stats/notion.test.mjs:689-1165`）
-- [x] 运行 JS 测试、Rust 测试、前端语法检查和 `git diff --check`，记录具体 evidence
+- [x] 运行 JS 测试、Rust 测试、前端语法检查和 `git diff --check`，记录具体 evidence（`node --test src/stats/notion.test.mjs`：31/31；`cargo test`：44/44；完成提交 `500e3f7`）
 
 ## Notes
 
@@ -37,3 +37,4 @@
 - 配置与 Rust payload 在首次 await 前后分别复制冻结；测试在执行中篡改原对象，全部请求仍使用同一 Token、目标库、月份和五个 GoalView 字段，且不扫描任务数据。
 - 最近摘要只向 `monthly:YYYY-MM` 写入 `created / updated / failed`；Rust 继续负责追加时间。日志为 best-effort，不对外承诺磁盘落盘状态，也不改变已发生的远端计数。
 - 独立代码、测试与安全复审均无 P0 / P1 / P2 遗留。用户于 2026-08-25 验收通过；尚未接入 UI，也未向真实 Notion 写入任何记录。
+- 完成提交：`500e3f7`（完整 hash：`500e3f715dee03cd0fd0318525c7d1ecaf0a276f`）。以上行号按该 revision 解释。

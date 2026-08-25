@@ -80,7 +80,7 @@ Tauri 2.x(macOS 13+):Rust 负责状态机/计时/持久化/音频/托盘,前端 
 
 ### 提交前自检
 
-- [ ] `TOMATO_TEST=1 cargo tauri dev` 跑通一轮完整番茄周期(专注 → 提醒 → 休息 → 下一轮)
+- [ ] `TOMATO_TEST=1 cargo tauri dev --config src-tauri/tauri.dev.conf.json` 跑通一轮完整番茄周期(专注 → 提醒 → 休息 → 下一轮)
 - [ ] 发布向提交确认 TEST_MODE 关闭
 - [ ] 改了 DESIGN.md 则跑 `npx @google/design.md lint DESIGN.md`
 
@@ -98,11 +98,13 @@ Tauri 2.x(macOS 13+):Rust 负责状态机/计时/持久化/音频/托盘,前端 
 ## 工具链常用命令
 
 ```bash
-cargo tauri dev                 # 开发运行
-TOMATO_TEST=1 cargo tauri dev   # 测试模式:专注 15s / 休息 30s(单一开关,只在 Rust 侧)
-cargo tauri build               # 构建 .app / .dmg(自用不签名)
+cargo tauri dev --config src-tauri/tauri.dev.conf.json
+TOMATO_TEST=1 cargo tauri dev --config src-tauri/tauri.dev.conf.json
+env -u TOMATO_TEST -u TOMATO_AUTOSTART -u TOMATO_OPEN_STATS cargo tauri build --target aarch64-apple-darwin --no-sign
 npx @google/design.md lint DESIGN.md   # 改 DESIGN 后校验 token 与对比度
 ```
+
+开发版固定使用 `Tomato Monster Dev` / `com.tomatomonster.dev`，与 `/Applications/Tomato Monster.app` 的正式数据目录隔离；debug 若使用正式 identifier 会在读取 store 前拒绝启动。
 
 ## 在哪里找信息
 

@@ -32,7 +32,7 @@ const TIMEFRAME_SCHEMA = Object.freeze([
 
 async function invoke(cmd, args) {
   if (!tauri) {
-    console.log('[mock invoke]', cmd, args ?? '');
+    console.log('[mock invoke]', cmd);
     return null;
   }
   return tauri.core.invoke(cmd, args);
@@ -928,6 +928,53 @@ function buildTaskPageProps(task, isoDate, dayPageId) {
   return props;
 }
 
+function dailyExportLogSummary(summary) {
+  return {
+    ok: summary.ok === true,
+    created: summary.created,
+    updated: summary.updated,
+    failed: summary.failed,
+    total: summary.total,
+    existingDuplicates: summary.existingDuplicates,
+    dayPageLinked: summary.dayPageLinked === true,
+  };
+}
+
+/** 每日导出的三态反馈；保持 v1 文案，纯函数便于无 DOM 回归。 */
+export function buildDailyExportFeedback(result) {
+  const created = result?.created || 0;
+  const updated = result?.updated || 0;
+  if (!result?.ok && !created && !updated) {
+    return Object.freeze({
+      kind: 'error',
+      message: `导入失败:${result?.error || result?.errors?.[0]?.error || '全部失败'}`,
+    });
+  }
+
+  const rowMsg = `创建 ${created} / 更新 ${updated} / 总计 ${result?.total || 0} 行`;
+  const linkMsg = result?.dayPageLinked
+    ? '· 已关联所属日'
+    : '· 未关联所属日(日页面 DB ID 未配置或当天页面不存在)';
+  const duplicateMsg = result?.existingDuplicates > 0
+    ? `\nNotion 中已有 ${result.existingDuplicates} 条同日同名重复行,本次只更新每组第一条。`
+    : '';
+  if (result?.ok) {
+    return Object.freeze({
+      kind: 'success',
+      message: `导入成功:${rowMsg} ${linkMsg}${duplicateMsg}`,
+    });
+  }
+
+  const firstError = result?.errors?.[0];
+  const errorMessage = firstError
+    ? `\n首个错误:${firstError.task} - ${firstError.error}`
+    : '';
+  return Object.freeze({
+    kind: 'partial',
+    message: `部分成功:${rowMsg}(失败 ${result?.failed || 0}) ${linkMsg}${duplicateMsg}${errorMessage}`,
+  });
+}
+
 /** 把某一天的任务批量导入 Notion(旧 notionExportDay);tasks 由调用方从 bundle 提供 */
 export async function exportDay(date, tasks) {
   const cfg = await getNotionConfig();
@@ -995,6 +1042,6 @@ export async function exportDay(date, tasks) {
     errors,
   };
 
-  await invoke('log_notion_export', { date, summary });
+  await invoke('log_notion_export', { date, summary: dailyExportLogSummary(summary) });
   return summary;
 }

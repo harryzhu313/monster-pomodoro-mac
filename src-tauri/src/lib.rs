@@ -1,4 +1,4 @@
-// 入口与接线:Rust 是唯一事实来源,前端纯视图(ARCHITECTURE §2)。
+// 入口与接线:Rust 是本地业务状态唯一事实来源,前端是视图与受限 Notion 适配层(ARCHITECTURE §2)。
 // - timer.rs:状态机(行为对齐旧 service-worker.js)
 // - store.rs:持久化(原子写 store.json)
 // - tick 线程每秒驱动:到点结算、托盘标题、state-update 快照广播
@@ -20,6 +20,39 @@ mod timer;
 use audio::{AudioCmd, AudioEngine};
 use store::Store;
 use timer::{Durations, Effect};
+
+const PRODUCTION_IDENTIFIER: &str = "com.tomatomonster.app";
+
+/// Debug 进程必须使用开发版 identifier，避免误读写正式版 store。
+fn validate_development_identity(identifier: &str, debug_build: bool) -> std::io::Result<()> {
+    if debug_build && identifier == PRODUCTION_IDENTIFIER {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "debug 启动被拒绝：请使用 `cargo tauri dev --config src-tauri/tauri.dev.conf.json`，避免读写正式版数据",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod development_identity_tests {
+    use super::validate_development_identity;
+
+    #[test]
+    fn debug_build_rejects_production_identifier() {
+        assert!(validate_development_identity("com.tomatomonster.app", true).is_err());
+    }
+
+    #[test]
+    fn debug_build_accepts_development_identifier() {
+        assert!(validate_development_identity("com.tomatomonster.dev", true).is_ok());
+    }
+
+    #[test]
+    fn release_build_accepts_production_identifier() {
+        assert!(validate_development_identity("com.tomatomonster.app", false).is_ok());
+    }
+}
 
 struct AppState {
     store: Mutex<Store>,
@@ -227,7 +260,9 @@ async fn update_settings(app: AppHandle, patch: serde_json::Value) {
     if !noise_on {
         state.audio.send(AudioCmd::NoiseStop);
     } else if breaking {
-        state.audio.send(AudioCmd::NoiseStart { delay: std::time::Duration::ZERO });
+        state.audio.send(AudioCmd::NoiseStart {
+            delay: std::time::Duration::ZERO,
+        });
     }
 }
 
@@ -247,12 +282,16 @@ async fn add_task(app: AppHandle, title: String, category: Option<String>, plann
 
 #[tauri::command]
 async fn set_task_done(app: AppHandle, id: serde_json::Value, done: bool) {
-    with_store(&app, |d, _, today, _| timer::set_task_done(d, today, &id, done));
+    with_store(&app, |d, _, today, _| {
+        timer::set_task_done(d, today, &id, done)
+    });
 }
 
 #[tauri::command]
 async fn set_current_task(app: AppHandle, id: serde_json::Value) {
-    with_store(&app, |d, _, today, _| timer::set_current_task(d, today, &id));
+    with_store(&app, |d, _, today, _| {
+        timer::set_current_task(d, today, &id)
+    });
 }
 
 #[tauri::command]
@@ -263,14 +302,18 @@ async fn delete_task(app: AppHandle, id: serde_json::Value) {
 /// 改今天这条任务的计划番茄数;下限夹紧在 Rust 侧,前端的 min 只是体验优化
 #[tauri::command]
 async fn set_task_planned(app: AppHandle, id: serde_json::Value, planned: f64) {
-    with_store(&app, |d, _, today, _| timer::set_task_planned(d, today, &id, planned));
+    with_store(&app, |d, _, today, _| {
+        timer::set_task_planned(d, today, &id, planned)
+    });
 }
 
 // —— 月度目标(v2)——
 
 #[tauri::command]
 async fn add_goal(app: AppHandle, title: String, category: Option<String>, month_target: f64) {
-    with_store(&app, |d, now, _, _| timer::add_goal(d, now, &title, category, month_target));
+    with_store(&app, |d, now, _, _| {
+        timer::add_goal(d, now, &title, category, month_target)
+    });
 }
 
 #[tauri::command]
@@ -281,7 +324,9 @@ async fn update_goal(
     category: Option<String>,
     month_target: Option<f64>,
 ) {
-    with_store(&app, |d, _, _, _| timer::update_goal(d, &id, title, category, month_target));
+    with_store(&app, |d, _, _, _| {
+        timer::update_goal(d, &id, title, category, month_target)
+    });
 }
 
 #[tauri::command]
@@ -291,7 +336,9 @@ async fn delete_goal(app: AppHandle, id: String) {
 
 #[tauri::command]
 async fn toggle_goal_today(app: AppHandle, id: String) -> timer::GoalToggleOutcome {
-    with_store(&app, |d, now, today, _| timer::toggle_goal_today(d, today, now, &id))
+    with_store(&app, |d, now, today, _| {
+        timer::toggle_goal_today(d, today, now, &id)
+    })
 }
 
 // —— 备份导入导出 / Notion 配置 ——
@@ -303,6 +350,29 @@ struct ExportOutcome {
     canceled: bool,
     path: Option<String>,
     error: Option<String>,
+}
+
+fn write_backup_file(path: &std::path::Path, json: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::{OpenOptions, Permissions};
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        // 不在 open 时 truncate：先确认能收窄权限，失败时不破坏同名旧备份。
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(Permissions::from_mode(0o600))?;
+        file.set_len(0)?;
+        file.write_all(json.as_bytes())?;
+        return file.sync_all();
+    }
+
+    #[cfg(not(unix))]
+    std::fs::write(path, json)
 }
 
 #[tauri::command]
@@ -323,21 +393,33 @@ async fn export_backup(app: AppHandle) -> ExportOutcome {
         .add_filter("JSON", &["json"])
         .blocking_save_file()
     else {
-        return ExportOutcome { ok: false, canceled: true, path: None, error: None };
+        return ExportOutcome {
+            ok: false,
+            canceled: true,
+            path: None,
+            error: None,
+        };
     };
     let Ok(path) = path.into_path() else {
         return ExportOutcome {
-            ok: false, canceled: false, path: None,
+            ok: false,
+            canceled: false,
+            path: None,
             error: Some("无效的保存路径".into()),
         };
     };
-    match std::fs::write(&path, json) {
+    match write_backup_file(&path, &json) {
         Ok(()) => ExportOutcome {
-            ok: true, canceled: false,
-            path: Some(path.display().to_string()), error: None,
+            ok: true,
+            canceled: false,
+            path: Some(path.display().to_string()),
+            error: None,
         },
         Err(e) => ExportOutcome {
-            ok: false, canceled: false, path: None, error: Some(e.to_string()),
+            ok: false,
+            canceled: false,
+            path: None,
+            error: Some(e.to_string()),
         },
     }
 }
@@ -345,8 +427,16 @@ async fn export_backup(app: AppHandle) -> ExportOutcome {
 #[tauri::command]
 async fn import_backup(app: AppHandle, json: String) -> store::ImportOutcome {
     with_store(&app, |d, _, _, _| match store::import_backup(d, &json) {
-        Ok(days) => store::ImportOutcome { ok: true, error: None, days },
-        Err(e) => store::ImportOutcome { ok: false, error: Some(e), days: 0 },
+        Ok(days) => store::ImportOutcome {
+            ok: true,
+            error: None,
+            days,
+        },
+        Err(e) => store::ImportOutcome {
+            ok: false,
+            error: Some(e),
+            days: 0,
+        },
     })
 }
 
@@ -358,28 +448,121 @@ async fn get_notion_config(app: AppHandle) -> store::NotionConfig {
 }
 
 #[tauri::command]
-async fn set_notion_config(
-    app: AppHandle,
-    config: store::NotionConfigPatch,
-) -> Result<(), String> {
+async fn set_notion_config(app: AppHandle, config: store::NotionConfigPatch) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut guard = state.store.lock().expect("store lock poisoned");
-    guard.update_notion_config(config).map_err(|e| e.to_string())
+    guard
+        .update_notion_config(config)
+        .map_err(|e| e.to_string())
+}
+
+fn notion_export_entry(date: &str, at: String, summary: serde_json::Value) -> serde_json::Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("at".into(), serde_json::Value::String(at));
+    if let serde_json::Value::Object(m) = summary {
+        for (k, v) in m {
+            if k != "at" {
+                entry.insert(k, v);
+            }
+        }
+    }
+    // Rust 边界再次执行统一白名单，防止未来前端误传的敏感字段进入 store/备份。
+    store::sanitize_notion_export_entry(date, &serde_json::Value::Object(entry))
 }
 
 /// 记一笔 Notion 导出历史(旧 notionExportLog 语义:prev[date] = {at, ...summary})
 #[tauri::command]
 async fn log_notion_export(app: AppHandle, date: String, summary: serde_json::Value) {
     with_store(&app, |d, _, _, _| {
-        let mut entry = serde_json::Map::new();
-        entry.insert("at".into(), serde_json::Value::String(chrono::Local::now().to_rfc3339()));
-        if let serde_json::Value::Object(m) = summary {
-            for (k, v) in m {
-                entry.insert(k, v);
-            }
-        }
-        d.notion_export_log.insert(date, serde_json::Value::Object(entry));
+        let entry = notion_export_entry(&date, chrono::Local::now().to_rfc3339(), summary);
+        d.notion_export_log.insert(date, entry);
     });
+}
+
+#[cfg(test)]
+mod notion_export_tests {
+    use super::{notion_export_entry, write_backup_file};
+    use serde_json::json;
+
+    #[test]
+    fn monthly_export_log_keeps_only_timestamp_and_counts() {
+        let entry = notion_export_entry(
+            "monthly:2026-08",
+            "2026-08-25T10:00:00+08:00".into(),
+            json!({
+                "created": 2,
+                "updated": 3,
+                "failed": 1,
+                "token": "should-not-persist",
+                "databaseId": "should-not-persist",
+                "request": { "properties": "should-not-persist" },
+                "errors": [{ "title": "should-not-persist" }]
+            }),
+        );
+        assert_eq!(
+            entry,
+            json!({
+                "at": "2026-08-25T10:00:00+08:00",
+                "created": 2,
+                "updated": 3,
+                "failed": 1
+            })
+        );
+        assert!(!entry.to_string().contains("should-not-persist"));
+    }
+
+    #[test]
+    fn daily_export_log_keeps_safe_feedback_fields_only() {
+        let summary = json!({
+            "ok": false,
+            "created": 1,
+            "updated": 0,
+            "failed": 1,
+            "total": 2,
+            "existingDuplicates": 3,
+            "dayPageLinked": true,
+            "errors": [{ "task": "should-not-persist", "error": "should-not-persist" }],
+            "token": "should-not-persist"
+        });
+        let entry = notion_export_entry(
+            "2026-08-25",
+            "2026-08-25T10:00:00+08:00".into(),
+            summary.clone(),
+        );
+        assert_eq!(entry["ok"], summary["ok"]);
+        assert_eq!(entry["created"], 1);
+        assert_eq!(entry["updated"], 0);
+        assert_eq!(entry["failed"], 1);
+        assert_eq!(entry["total"], 2);
+        assert_eq!(entry["existingDuplicates"], 3);
+        assert_eq!(entry["dayPageLinked"], true);
+        assert_eq!(entry["at"], "2026-08-25T10:00:00+08:00");
+        assert!(entry.get("errors").is_none());
+        assert!(!entry.to_string().contains("should-not-persist"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_file_is_written_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tomato-monster-private-backup-{}-{unique}.json",
+            std::process::id()
+        ));
+        write_backup_file(&path, r#"{"fixture":true}"#).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"fixture":true}"#
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 // —— 全局快捷键 / 开机自启 / 首启引导 / 庆祝弹层 ——
@@ -417,7 +600,10 @@ async fn set_global_shortcut(app: AppHandle, accel: String) -> ShortcutOutcome {
     match apply_global_shortcut(&app, &accel) {
         Ok(()) => {
             with_store(&app, |d, _, _, _| d.settings.global_shortcut = accel);
-            ShortcutOutcome { ok: true, error: None }
+            ShortcutOutcome {
+                ok: true,
+                error: None,
+            }
         }
         Err(e) => {
             // 注册失败:回滚到原有快捷键,不写入设置
@@ -427,7 +613,10 @@ async fn set_global_shortcut(app: AppHandle, accel: String) -> ShortcutOutcome {
                 guard.data.settings.global_shortcut.clone()
             };
             let _ = apply_global_shortcut(&app, &prev);
-            ShortcutOutcome { ok: false, error: Some(e) }
+            ShortcutOutcome {
+                ok: false,
+                error: Some(e),
+            }
         }
     }
 }
@@ -441,10 +630,20 @@ async fn get_autostart(app: AppHandle) -> bool {
 #[tauri::command]
 async fn set_autostart(app: AppHandle, enabled: bool) -> ShortcutOutcome {
     use tauri_plugin_autostart::ManagerExt;
-    let r = if enabled { app.autolaunch().enable() } else { app.autolaunch().disable() };
+    let r = if enabled {
+        app.autolaunch().enable()
+    } else {
+        app.autolaunch().disable()
+    };
     match r {
-        Ok(()) => ShortcutOutcome { ok: true, error: None },
-        Err(e) => ShortcutOutcome { ok: false, error: Some(e.to_string()) },
+        Ok(()) => ShortcutOutcome {
+            ok: true,
+            error: None,
+        },
+        Err(e) => ShortcutOutcome {
+            ok: false,
+            error: Some(e.to_string()),
+        },
     }
 }
 
@@ -510,7 +709,9 @@ async fn open_stats(app: AppHandle) {
     .build()
     {
         Ok(w) => {
-            app.state::<AppState>().stats_open.store(true, Ordering::SeqCst);
+            app.state::<AppState>()
+                .stats_open
+                .store(true, Ordering::SeqCst);
             // Sidebar 材质磨砂感强;UnderWindowBackground 太透,壁纸会穿透(用户反馈)
             #[cfg(target_os = "macos")]
             if let Err(e) = window_vibrancy::apply_vibrancy(
@@ -556,14 +757,21 @@ async fn set_history_task_done(app: AppHandle, date: String, id: serde_json::Val
 fn show_panel_window(app: &AppHandle, focus: bool) {
     if let Some(panel) = app.get_webview_window("panel") {
         // 托盘位置未知时(如刚启动未碰过托盘)定位会失败,退回右上角
-        if panel.as_ref().window().move_window(Position::TrayBottomCenter).is_err() {
+        if panel
+            .as_ref()
+            .window()
+            .move_window(Position::TrayBottomCenter)
+            .is_err()
+        {
             let _ = panel.as_ref().window().move_window(Position::TopRight);
         }
         let _ = panel.show();
         if focus {
             let _ = panel.set_focus();
         }
-        app.state::<AppState>().panel_visible.store(true, Ordering::SeqCst);
+        app.state::<AppState>()
+            .panel_visible
+            .store(true, Ordering::SeqCst);
     }
 }
 
@@ -596,7 +804,9 @@ fn toggle_panel(app: &AppHandle) {
             // 钉住期间(休息中)点托盘不收起——无免费跳过的一部分
             if !pinned {
                 let _ = panel.hide();
-                app.state::<AppState>().panel_visible.store(false, Ordering::SeqCst);
+                app.state::<AppState>()
+                    .panel_visible
+                    .store(false, Ordering::SeqCst);
             }
         } else {
             show_panel(app, true);
@@ -609,6 +819,11 @@ pub fn run() {
     if durations.test_mode {
         println!("[TOMATO_TEST] 测试模式:专注 15s / 休息 30s / 最后一分钟 5s");
     }
+
+    // 在插件初始化和 app data 路径解析之前失败，确保 debug 不会碰正式版数据。
+    let context = tauri::generate_context!();
+    validate_development_identity(&context.config().identifier, cfg!(debug_assertions))
+        .unwrap_or_else(|message| panic!("{message}"));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
@@ -629,6 +844,12 @@ pub fn run() {
             None,
         ))
         .setup(move |app| {
+            let app_name = app
+                .config()
+                .product_name
+                .clone()
+                .unwrap_or_else(|| "Tomato Monster".into());
+
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
@@ -650,14 +871,18 @@ pub fn run() {
                 use tauri::menu::{MenuBuilder, MenuItemBuilder};
                 let stats_item = MenuItemBuilder::with_id("stats", "统计与设置").build(app)?;
                 let quit_item =
-                    MenuItemBuilder::with_id("quit", "退出 Tomato Monster").build(app)?;
-                MenuBuilder::new(app).item(&stats_item).separator().item(&quit_item).build()?
+                    MenuItemBuilder::with_id("quit", format!("退出 {app_name}")).build(app)?;
+                MenuBuilder::new(app)
+                    .item(&stats_item)
+                    .separator()
+                    .item(&quit_item)
+                    .build()?
             };
 
             TrayIconBuilder::with_id("main")
                 .icon(Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?)
                 .icon_as_template(true)
-                .tooltip("Tomato Monster · 按时停下来")
+                .tooltip(format!("{app_name} · 按时停下来"))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -681,12 +906,24 @@ pub fn run() {
                 .build(app)?;
 
             // 加载持久化状态(schema 见 ARCHITECTURE §4)
-            let store_path = app
-                .path()
-                .app_data_dir()
-                .expect("app data dir unavailable")
-                .join("store.json");
-            let store = Store::load(store_path);
+            let store_path = if durations.test_mode {
+                // 全链路测试不得给真实统计增加 15 秒测试番茄；按进程隔离到系统临时目录。
+                std::env::temp_dir().join(format!(
+                    "tomato-monster-test-{}-{}.json",
+                    std::process::id(),
+                    chrono::Local::now().timestamp_millis()
+                ))
+            } else {
+                app.path()
+                    .app_data_dir()
+                    .expect("app data dir unavailable")
+                    .join("store.json")
+            };
+            let mut store = Store::load(store_path);
+            if durations.test_mode {
+                // 测试周期直接进入产品面板，不被首次引导遮挡。
+                store.data.onboarding_done = true;
+            }
             // 重启恢复到休息中:白噪音接着放、面板重新钉住(状态驱动)
             let resume_break = store.data.timer_state.state == store::TimerPhase::Breaking;
             let resume_noise = resume_break && store.data.settings.white_noise_enabled;
@@ -704,7 +941,9 @@ pub fn run() {
             });
             let state = app.state::<AppState>();
             if resume_noise {
-                state.audio.send(AudioCmd::NoiseStart { delay: std::time::Duration::ZERO });
+                state.audio.send(AudioCmd::NoiseStart {
+                    delay: std::time::Duration::ZERO,
+                });
             }
             if resume_break {
                 state.panel_pinned.store(true, Ordering::SeqCst);
@@ -723,7 +962,10 @@ pub fn run() {
 
             // 开发自测钩子:TOMATO_AUTOSTART=1 启动即开始一个专注,
             // 无需点 UI 即可在日志观察完整周期(仅测试用,类比旧 TEST_MODE 惯例)
-            if std::env::var("TOMATO_AUTOSTART").map(|v| v == "1").unwrap_or(false) {
+            if std::env::var("TOMATO_AUTOSTART")
+                .map(|v| v == "1")
+                .unwrap_or(false)
+            {
                 let state = app.state::<AppState>();
                 let mut guard = state.store.lock().unwrap();
                 let now = now_ms();
@@ -732,7 +974,10 @@ pub fn run() {
             }
 
             // 开发自测钩子:启动即开统计窗口(验证窗口创建/vibrancy,仅测试用)
-            if std::env::var("TOMATO_OPEN_STATS").map(|v| v == "1").unwrap_or(false) {
+            if std::env::var("TOMATO_OPEN_STATS")
+                .map(|v| v == "1")
+                .unwrap_or(false)
+            {
                 tauri::async_runtime::spawn(open_stats(app.handle().clone()));
             }
 
@@ -747,13 +992,18 @@ pub fn run() {
                         let now = now_ms();
                         let today = timer::today_str();
                         let mut effects = timer::handle_phase_end_if_due(
-                            &mut guard.data, now, &today, &state.durations,
+                            &mut guard.data,
+                            now,
+                            &today,
+                            &state.durations,
                         );
                         {
-                            let mut fired =
-                                state.last_minute_fired.lock().expect("lock poisoned");
+                            let mut fired = state.last_minute_fired.lock().expect("lock poisoned");
                             effects.extend(timer::check_last_minute(
-                                &guard.data, now, &state.durations, &mut fired,
+                                &guard.data,
+                                now,
+                                &state.durations,
+                                &mut fired,
                             ));
                         }
                         // 跨天归档:放在结算之后(与 get_state 同序,跨零点的专注先记到
@@ -853,6 +1103,6 @@ pub fn run() {
             finish_onboarding,
             close_celebration
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

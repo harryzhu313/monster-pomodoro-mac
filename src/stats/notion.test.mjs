@@ -738,6 +738,77 @@ test('monthly sync keeps preflight failures at zero writes and preserves the pri
   assert.deepEqual(invokeCalls.map(({ cmd }) => cmd), ['get_notion_config']);
 });
 
+test('monthly sync recovers after an inaccessible goal DB is restored without an earlier write', async () => {
+  installGoalSyncHandler();
+  const validHandler = fetchHandler;
+  fetchHandler = async (url, init) => {
+    if (new URL(url).pathname === '/v1/databases/bad-goal') {
+      return jsonResponse(404, { message: 'database not found' });
+    }
+    return validHandler(url, init);
+  };
+  storedConfig.goalDbId = 'bad-goal';
+
+  await assert.rejects(
+    notion.syncMonthlyGoals(syncSnapshot()),
+    (error) => error?.code === 'database_access'
+  );
+  assert.equal(requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')), false);
+  assert.equal(invokeCalls.some(({ cmd }) => cmd === 'log_notion_export'), false);
+
+  requests = [];
+  invokeCalls = [];
+  storedConfig.goalDbId = IDS.goalDb;
+  const retry = await notion.syncMonthlyGoals(syncSnapshot());
+  assert.equal(retry.ok, true);
+  assert.equal(retry.created, 1);
+  assert.equal(retry.failed, 0);
+});
+
+test('missing, ambiguous, and unreadable month pages all stop monthly sync before writes', async () => {
+  const scenarios = [
+    {
+      name: 'missing month',
+      code: 'month_page_not_found',
+      timeframeQuery: () => pageList([]),
+    },
+    {
+      name: 'ambiguous month',
+      code: 'month_page_ambiguous',
+      timeframeQuery: () => pageList([
+        monthPage('aug-a', '2026-08-01', '2026-08-31'),
+        monthPage('aug-b', '2026-08-01', '2026-08-31'),
+      ]),
+    },
+    {
+      name: 'Notion unavailable',
+      code: 'notion_unavailable',
+      timeframeQuery: () => jsonResponse(503, { message: 'temporarily unavailable' }),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    requests = [];
+    invokeCalls = [];
+    installGoalSyncHandler({ timeframeQuery: scenario.timeframeQuery });
+    await assert.rejects(
+      notion.syncMonthlyGoals(syncSnapshot()),
+      (error) => error?.code === scenario.code,
+      scenario.name
+    );
+    assert.equal(
+      requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')),
+      false,
+      scenario.name
+    );
+    assert.equal(
+      invokeCalls.some(({ cmd }) => cmd === 'log_notion_export'),
+      false,
+      scenario.name
+    );
+  }
+});
+
 test('monthly sync reports validation before writing and ignores UI callback failures', async () => {
   installGoalSyncHandler();
   const stages = [];
@@ -1000,6 +1071,50 @@ test('a malformed later query page aborts before every create or update', async 
   );
 });
 
+test('missing and repeated monthly goal cursors abort with zero writes and zero logs', async () => {
+  const scenarios = [
+    {
+      name: 'missing cursor',
+      query: () => pageList([], true, null),
+      queryCount: 1,
+    },
+    {
+      name: 'repeated cursor',
+      query: () => pageList([], true, 'same-goal-cursor'),
+      queryCount: 2,
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    requests = [];
+    invokeCalls = [];
+    installGoalSyncHandler({ goalQuery: scenario.query });
+
+    await assert.rejects(
+      notion.syncMonthlyGoals(syncSnapshot()),
+      (error) => error?.code === 'goal_pagination',
+      scenario.name
+    );
+    assert.equal(
+      requests.filter(({ url }) => (
+        new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`
+      )).length,
+      scenario.queryCount,
+      scenario.name
+    );
+    assert.equal(
+      requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')),
+      false,
+      scenario.name
+    );
+    assert.equal(
+      invokeCalls.some(({ cmd }) => cmd === 'log_notion_export'),
+      false,
+      scenario.name
+    );
+  }
+});
+
 test('duplicate local goal IDs are all skipped before writes while unique goals continue', async () => {
   const createdGoalIds = [];
   installGoalSyncHandler({
@@ -1184,6 +1299,124 @@ test('a lost create response is recovered by a fresh query without creating dupl
   assert.equal(persisted.includes('remote-g-lost'), false);
 });
 
+test('a partial write failure retries only the missing record and converges without duplicates', async () => {
+  const remotePages = [];
+  let failFlakyOnce = true;
+  installGoalSyncHandler({
+    goalQuery: () => pageList(remotePages),
+    create: (body) => {
+      const goalId = body.properties['本地目标 ID'].rich_text[0].text.content;
+      if (goalId === 'g-flaky' && failFlakyOnce) {
+        failFlakyOnce = false;
+        return jsonResponse(403, { message: 'write permission denied' });
+      }
+      const id = `remote-${goalId}`;
+      remotePages.push({ object: 'page', id, properties: body.properties });
+      return { id };
+    },
+    update: (pageId, body) => {
+      const page = remotePages.find((item) => item.id === pageId);
+      page.properties = body.properties;
+      return { id: pageId };
+    },
+  });
+  const snapshot = syncSnapshot({ goals: [
+    goalView({ id: 'g-stable', title: '稳定目标' }),
+    goalView({ id: 'g-flaky', title: '待重试目标' }),
+  ] });
+
+  const first = await notion.syncMonthlyGoals(snapshot);
+  assert.deepEqual(
+    { created: first.created, updated: first.updated, failed: first.failed },
+    { created: 1, updated: 0, failed: 1 }
+  );
+  assert.deepEqual(
+    remotePages.map((page) => page.properties['本地目标 ID'].rich_text[0].text.content),
+    ['g-stable']
+  );
+
+  const second = await notion.syncMonthlyGoals(snapshot);
+  assert.deepEqual(
+    { created: second.created, updated: second.updated, failed: second.failed },
+    { created: 1, updated: 1, failed: 0 }
+  );
+  assert.equal(remotePages.length, 2);
+  assert.equal(new Set(remotePages.map((page) => (
+    page.properties['本地目标 ID'].rich_text[0].text.content
+  ))).size, 2);
+
+  const third = await notion.syncMonthlyGoals(snapshot);
+  assert.deepEqual(
+    { created: third.created, updated: third.updated, failed: third.failed },
+    { created: 0, updated: 2, failed: 0 }
+  );
+  assert.equal(remotePages.length, 2);
+});
+
+test('one failed update never crosses page identities and a retry converges without creates', async () => {
+  const remotePages = [
+    remoteGoalPage('page-a', 'g-a'),
+    remoteGoalPage('page-b', 'g-b'),
+  ];
+  const patches = [];
+  let failPageAOnce = true;
+  installGoalSyncHandler({
+    goalQuery: () => pageList(remotePages),
+    update: (pageId, body) => {
+      const goalId = body.properties['本地目标 ID'].rich_text[0].text.content;
+      patches.push({ pageId, goalId, body });
+      if (pageId === 'page-a' && failPageAOnce) {
+        failPageAOnce = false;
+        return jsonResponse(500, { message: 'temporary update failure' });
+      }
+      const page = remotePages.find((item) => item.id === pageId);
+      page.properties = body.properties;
+      return { id: pageId };
+    },
+  });
+  const snapshot = syncSnapshot({ goals: [
+    goalView({ id: 'g-a', title: '目标 A' }),
+    goalView({ id: 'g-b', title: '目标 B' }),
+  ] });
+
+  const first = await notion.syncMonthlyGoals(snapshot);
+  assert.deepEqual(
+    { created: first.created, updated: first.updated, failed: first.failed },
+    { created: 0, updated: 1, failed: 1 }
+  );
+  assert.equal(first.errors[0].goalId, 'g-a');
+  assert.deepEqual(
+    patches.map(({ pageId, goalId }) => [pageId, goalId]),
+    [['page-a', 'g-a'], ['page-b', 'g-b']]
+  );
+  assert.equal(
+    requests.some(({ url, init }) => (
+      new URL(url).pathname === '/v1/pages' && init.method === 'POST'
+    )),
+    false
+  );
+
+  requests = [];
+  invokeCalls = [];
+  const secondPatchStart = patches.length;
+  const second = await notion.syncMonthlyGoals(snapshot);
+  assert.deepEqual(
+    { created: second.created, updated: second.updated, failed: second.failed },
+    { created: 0, updated: 2, failed: 0 }
+  );
+  assert.deepEqual(
+    patches.slice(secondPatchStart).map(({ pageId, goalId }) => [pageId, goalId]),
+    [['page-a', 'g-a'], ['page-b', 'g-b']]
+  );
+  assert.equal(
+    requests.some(({ url, init }) => (
+      new URL(url).pathname === '/v1/pages' && init.method === 'POST'
+    )),
+    false
+  );
+  assert.equal(remotePages.length, 2);
+});
+
 test('summary persistence failure does not change successful remote write counts', async () => {
   installGoalSyncHandler();
   logInvokeError = new Error('store unavailable');
@@ -1235,4 +1468,297 @@ test('daily export ignores goalDbId and keeps its existing request flow', async 
     requests.map(({ init }) => init.method),
     ['POST', 'POST']
   );
+});
+
+test('daily export keeps its field, relation, title-dedupe, update, and feedback contract', async () => {
+  const existingTaskPage = {
+    object: 'page',
+    id: 'existing-task-page',
+    properties: { 任务名: { title: [{ plain_text: '既有任务' }] } },
+  };
+  const duplicateTaskPage = {
+    object: 'page',
+    id: 'duplicate-task-page',
+    properties: { 任务名: { title: [{ plain_text: '既有任务' }] } },
+  };
+  fetchHandler = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === '/v1/databases/day-a/query') {
+      return jsonResponse(200, pageList([{ object: 'page', id: 'day-page' }]));
+    }
+    if (path === '/v1/databases/task-a/query') {
+      return jsonResponse(200, pageList([existingTaskPage, duplicateTaskPage]));
+    }
+    if (path === '/v1/pages/existing-task-page' && init.method === 'PATCH') {
+      return jsonResponse(200, { id: 'existing-task-page' });
+    }
+    if (path === '/v1/pages' && init.method === 'POST') {
+      return jsonResponse(200, { id: 'created-task-page' });
+    }
+    return jsonResponse(500, { message: `unexpected request: ${path}` });
+  };
+
+  const result = await notion.exportDay('2026-08-25', [
+    { title: '既有任务', planned: 2, used: 3, rotten: 1, category: '学习' },
+    { title: '新增任务', planned: 1, used: 0, rotten: 0, category: '生活' },
+  ]);
+
+  assert.deepEqual(result, {
+    ok: true,
+    created: 1,
+    updated: 1,
+    failed: 0,
+    total: 2,
+    existingDuplicates: 1,
+    dayPageLinked: true,
+    errors: [],
+  });
+  const dayQuery = requests.find(({ url }) => (
+    new URL(url).pathname === '/v1/databases/day-a/query'
+  ));
+  assert.deepEqual(JSON.parse(dayQuery.init.body), {
+    filter: { property: '日期', date: { equals: '2026-08-25' } },
+    page_size: 1,
+  });
+  const taskQuery = requests.find(({ url }) => (
+    new URL(url).pathname === '/v1/databases/task-a/query'
+  ));
+  assert.deepEqual(JSON.parse(taskQuery.init.body), {
+    filter: { property: '日期', date: { equals: '2026-08-25' } },
+    page_size: 100,
+  });
+
+  const updateRequest = requests.find(({ url, init }) => (
+    new URL(url).pathname === '/v1/pages/existing-task-page' && init.method === 'PATCH'
+  ));
+  assert.deepEqual(JSON.parse(updateRequest.init.body), {
+    properties: {
+      任务名: { title: [{ type: 'text', text: { content: '既有任务' } }] },
+      日期: { date: { start: '2026-08-25' } },
+      计划番茄: { number: 2 },
+      实际番茄: { number: 3 },
+      超额番茄: { number: 1 },
+      放弃番茄: { number: 1 },
+      分类: { select: { name: '学习' } },
+      所属日: { relation: [{ id: 'day-page' }] },
+    },
+  });
+  assert.equal(
+    requests.some(({ url }) => new URL(url).pathname === '/v1/pages/duplicate-task-page'),
+    false
+  );
+
+  const createRequest = requests.find(({ url, init }) => (
+    new URL(url).pathname === '/v1/pages' && init.method === 'POST'
+  ));
+  const createBody = JSON.parse(createRequest.init.body);
+  assert.deepEqual(createBody.parent, { database_id: 'task-a' });
+  assert.deepEqual(createBody.properties.所属日, { relation: [{ id: 'day-page' }] });
+  assert.equal(createBody.properties.分类.select.name, '生活');
+  assert.deepEqual(invokeCalls.at(-1), {
+    cmd: 'log_notion_export',
+    args: {
+      date: '2026-08-25',
+      summary: {
+        ok: true,
+        created: 1,
+        updated: 1,
+        failed: 0,
+        total: 2,
+        existingDuplicates: 1,
+        dayPageLinked: true,
+      },
+    },
+  });
+  assert.equal(requests.some(({ url }) => url.includes(IDS.goalDb)), false);
+});
+
+test('daily export paginates before updating and omits relation when no day page exists', async () => {
+  const existingTaskPage = {
+    object: 'page',
+    id: 'later-task-page',
+    properties: { 任务名: { title: [{ plain_text: '分页任务' }] } },
+  };
+  fetchHandler = async (url, init) => {
+    const path = new URL(url).pathname;
+    const body = init.body ? JSON.parse(init.body) : {};
+    if (path === '/v1/databases/day-a/query') {
+      return jsonResponse(200, pageList([]));
+    }
+    if (path === '/v1/databases/task-a/query') {
+      return jsonResponse(200, body.start_cursor
+        ? pageList([existingTaskPage])
+        : pageList([], true, 'task-cursor-1'));
+    }
+    if (path === '/v1/pages/later-task-page' && init.method === 'PATCH') {
+      return jsonResponse(200, { id: 'later-task-page' });
+    }
+    return jsonResponse(500, { message: `unexpected request: ${path}` });
+  };
+
+  const result = await notion.exportDay('2026-08-25', [
+    { title: '分页任务', planned: 2, used: 1, rotten: 0, category: '工作' },
+  ]);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+  assert.equal(result.dayPageLinked, false);
+  const taskQueryBodies = requests
+    .filter(({ url }) => new URL(url).pathname === '/v1/databases/task-a/query')
+    .map(({ init }) => JSON.parse(init.body));
+  assert.deepEqual(taskQueryBodies, [
+    { filter: { property: '日期', date: { equals: '2026-08-25' } }, page_size: 100 },
+    {
+      filter: { property: '日期', date: { equals: '2026-08-25' } },
+      page_size: 100,
+      start_cursor: 'task-cursor-1',
+    },
+  ]);
+  const secondQueryIndex = requests.findLastIndex(({ url }) => (
+    new URL(url).pathname === '/v1/databases/task-a/query'
+  ));
+  const patchIndex = requests.findIndex(({ url, init }) => (
+    new URL(url).pathname === '/v1/pages/later-task-page' && init.method === 'PATCH'
+  ));
+  assert.equal(secondQueryIndex < patchIndex, true);
+  const properties = JSON.parse(requests[patchIndex].init.body).properties;
+  assert.equal(Object.hasOwn(properties, '所属日'), false);
+});
+
+test('daily export returns detailed partial failures but logs only safe statistics', async () => {
+  storedConfig.dayDbId = '';
+  fetchHandler = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === '/v1/databases/task-a/query') {
+      return jsonResponse(200, pageList([]));
+    }
+    if (path === '/v1/pages' && init.method === 'POST') {
+      const body = JSON.parse(init.body);
+      const title = body.properties.任务名.title[0].text.content;
+      return title === '失败任务'
+        ? jsonResponse(403, { message: 'write permission denied' })
+        : jsonResponse(200, { id: 'created-success-page' });
+    }
+    return jsonResponse(500, { message: `unexpected request: ${path}` });
+  };
+
+  const result = await notion.exportDay('2026-08-25', [
+    { title: '成功任务', planned: 1, used: 1, rotten: 0, category: '学习' },
+    { title: '失败任务', planned: 1, used: 0, rotten: 0, category: '生活' },
+  ]);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(result.errors, [{
+    task: '失败任务',
+    error: 'Notion API 403: write permission denied',
+  }]);
+  assert.deepEqual(invokeCalls.at(-1), {
+    cmd: 'log_notion_export',
+    args: {
+      date: '2026-08-25',
+      summary: {
+        ok: false,
+        created: 1,
+        updated: 0,
+        failed: 1,
+        total: 2,
+        existingDuplicates: 0,
+        dayPageLinked: false,
+      },
+    },
+  });
+  const persisted = JSON.stringify(invokeCalls.at(-1));
+  assert.equal(persisted.includes('成功任务'), false);
+  assert.equal(persisted.includes('失败任务'), false);
+  assert.equal(persisted.includes('write permission denied'), false);
+  assert.equal(persisted.includes('token-a'), false);
+  assert.equal(persisted.includes('task-a'), false);
+});
+
+test('daily export reports all item failures and still logs only safe counts', async () => {
+  storedConfig.dayDbId = '';
+  fetchHandler = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === '/v1/databases/task-a/query') {
+      return jsonResponse(200, pageList([]));
+    }
+    if (path === '/v1/pages' && init.method === 'POST') {
+      return jsonResponse(500, { message: 'temporary write failure' });
+    }
+    return jsonResponse(500, { message: `unexpected request: ${path}` });
+  };
+
+  const result = await notion.exportDay('2026-08-25', [
+    { title: '失败一', planned: 1, used: 0, rotten: 0, category: '工作' },
+    { title: '失败二', planned: 1, used: 0, rotten: 0, category: '学习' },
+  ]);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 2);
+  assert.equal(result.errors.length, 2);
+  assert.match(result.errors[0].error, /temporary write failure/);
+  assert.deepEqual(invokeCalls.at(-1), {
+    cmd: 'log_notion_export',
+    args: {
+      date: '2026-08-25',
+      summary: {
+        ok: false,
+        created: 0,
+        updated: 0,
+        failed: 2,
+        total: 2,
+        existingDuplicates: 0,
+        dayPageLinked: false,
+      },
+    },
+  });
+  assert.equal(JSON.stringify(invokeCalls.at(-1)).includes('temporary write failure'), false);
+});
+
+test('daily export feedback preserves success, partial, and failure messages without DOM', () => {
+  assert.deepEqual(notion.buildDailyExportFeedback({
+    ok: true,
+    created: 1,
+    updated: 2,
+    total: 3,
+    existingDuplicates: 2,
+    dayPageLinked: true,
+  }), {
+    kind: 'success',
+    message: '导入成功:创建 1 / 更新 2 / 总计 3 行 · 已关联所属日\n'
+      + 'Notion 中已有 2 条同日同名重复行,本次只更新每组第一条。',
+  });
+
+  assert.deepEqual(notion.buildDailyExportFeedback({
+    ok: false,
+    created: 1,
+    updated: 0,
+    failed: 1,
+    total: 2,
+    existingDuplicates: 0,
+    dayPageLinked: false,
+    errors: [{ task: '失败任务', error: '写入权限不足' }],
+  }), {
+    kind: 'partial',
+    message: '部分成功:创建 1 / 更新 0 / 总计 2 行(失败 1) '
+      + '· 未关联所属日(日页面 DB ID 未配置或当天页面不存在)\n'
+      + '首个错误:失败任务 - 写入权限不足',
+  });
+
+  assert.deepEqual(notion.buildDailyExportFeedback({
+    ok: false,
+    created: 0,
+    updated: 0,
+    failed: 2,
+    errors: [{ task: '失败任务', error: '全部写入失败' }],
+  }), {
+    kind: 'error',
+    message: '导入失败:全部写入失败',
+  });
 });

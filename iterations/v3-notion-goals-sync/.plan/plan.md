@@ -17,6 +17,7 @@ v2 已让月度目标、今日任务和实际番茄在本地形成闭环，但�
 - 将 Rust 快照中的当前月目标按 `所属月 + 本地目标 ID` 幂等创建或更新
 - 在月度目标卡提供手动同步、过程状态、结果摘要和可行动错误
 - 保存不含敏感信息的最近一次月度同步摘要，并完成异常、回归、文档和发布验收
+- 发布验收期间固定唯一正式 App 入口，并用独立名称 / Bundle ID 隔离开发版，避免陈旧进程竞争正式 store
 
 **不做：**
 
@@ -35,7 +36,7 @@ v2 已让月度目标、今日任务和实际番茄在本地形成闭环，但�
 | 02 | goal-sync-preflight | 只读验证完整 schema，并定位唯一的当前月页面 | completed |
 | 03 | goal-sync-core | 用稳定复合键实现可测试、可重试的幂等 upsert 核心 | completed |
 | 04 | goal-sync-ui | 接入同步 UI，并在真实 Notion 中完成新增与更新闭环 | completed |
-| 05 | hardening-spec-release | 完成异常回归、spec 同步、全链路测试与发布构建 | not started |
+| 05 | hardening-spec-release | 完成异常回归、spec 同步、全链路测试与发布构建 | completed |
 
 > 状态值：`not started` / `in progress` / `completed` / `blocked` / `skipped`
 >
@@ -52,6 +53,7 @@ v2 已让月度目标、今日任务和实际番茄在本地形成闭环，但�
 - **2026-08-25**：读取权限、schema、月份页属于零写入预检；进入写入阶段后允许单条部分失败，重复点击依靠同一复合键安全收口。
 - **2026-08-25**：最近一次摘要复用 `notionExportLog`，使用 `monthly:YYYY-MM` 命名空间，只保存时间与新增/更新/失败计数，不保存 Token、DB ID、标题或请求内容。
 - **2026-08-25**：五个 Phase 串行推进；每个 Phase 自测后停下，由用户验收并决定是否提交和进入下一阶段。
+- **2026-08-25**：发布版固定安装到 `/Applications/Tomato Monster.app`；开发版使用独立身份与数据目录，不引入单实例插件或新依赖。用户确认采用方案 B。
 
 ## Open Questions
 

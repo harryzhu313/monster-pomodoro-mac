@@ -156,6 +156,9 @@ components:
 ### button-secondary
 次级动作(重置/导出/测试)。半透明表面 + 发丝线边框,不抢主按钮的视觉权重。
 
+### monthly-sync-status
+月度目标卡中的「同步本月到 Notion」使用 button-secondary,不与「添加」争夺主动作层级。状态区沿用 card 表面和 rounded-md,loading / success / partial / error 只用 primary / success / warning / error 改变细边框;标题、正文和错误明细始终使用 `on-neutral`,不能把 11px 关键文字直接染成状态色。过程必须同时显示「校验中 / 同步中」文字,结果显示新增 / 更新 / 失败计数,长错误允许任意位置换行。
+
 ### card
 主面板与统计窗口的基础容器。半透明填充让 vibrancy 透光,发丝线描边。
 
@@ -213,6 +216,7 @@ components:
 - **对比度:** 白字 on #d94f3a = 4.1:1(临界,决定保留旧版配色;按钮文字保持 13px semibold,如后续 lint 报警整体切换 primary-strong 底 5.1:1)。深浅两套 token 分别校验,深色模式文字级番茄红一律用 primary-soft。
 - **键盘:** 面板内全部按钮/输入可 Tab 聚焦,聚焦环不隐藏。
 - **VoiceOver:** 图标按钮带 aria-label;倒计时状态不依赖颜色单独传达(始终有文字标签)。
+- **动态状态:** 月度同步状态使用 polite live region,仅在状态实际变化时改写;逐项目错误有可读标签并纳入同步按钮的描述关系,每秒快照广播不得重复播报同一内容。
 
 ## UI Framework Considerations
 

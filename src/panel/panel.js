@@ -18,7 +18,7 @@ const tauri = window.__TAURI__ ?? null;
 
 async function invoke(cmd, args) {
   if (!tauri) {
-    console.log('[mock invoke]', cmd, args ?? '');
+    console.log('[mock invoke]', cmd);
     return null;
   }
   return tauri.core.invoke(cmd, args);

@@ -16,7 +16,7 @@ const tauri = window.__TAURI__ ?? null;
 
 async function invoke(cmd, args) {
   if (!tauri) {
-    console.log('[mock invoke]', cmd, args ?? '');
+    console.log('[mock invoke]', cmd);
     return null;
   }
   return tauri.core.invoke(cmd, args);
@@ -830,25 +830,12 @@ async function exportDayToNotion(date, btn) {
   const tasks = date === bundle.today ? bundle.tasksToday.tasks : bundle.tasksArchive[date] || [];
   try {
     const result = await notion.exportDay(date, tasks);
-    if (!result.ok && !result.created && !result.updated) {
-      await messageDialog(`导入失败:${result.error || result.errors?.[0]?.error || '全部失败'}`);
+    const feedback = notion.buildDailyExportFeedback(result);
+    await messageDialog(feedback.message);
+    if (feedback.kind === 'error') {
       btn.disabled = false;
       btn.textContent = originalText;
       return;
-    }
-    const rowMsg = `创建 ${result.created || 0} / 更新 ${result.updated || 0} / 总计 ${result.total || 0} 行`;
-    const linkMsg = result.dayPageLinked
-      ? '· 已关联所属日'
-      : '· 未关联所属日(日页面 DB ID 未配置或当天页面不存在)';
-    const duplicateMsg = result.existingDuplicates > 0
-      ? `\nNotion 中已有 ${result.existingDuplicates} 条同日同名重复行,本次只更新每组第一条。`
-      : '';
-    if (result.ok) {
-      await messageDialog(`导入成功:${rowMsg} ${linkMsg}${duplicateMsg}`);
-    } else {
-      const firstErr = result.errors?.[0];
-      const errMsg = firstErr ? `\n首个错误:${firstErr.task} - ${firstErr.error}` : '';
-      await messageDialog(`部分成功:${rowMsg}(失败 ${result.failed || 0}) ${linkMsg}${duplicateMsg}${errMsg}`);
     }
     await refreshBundle();
   } catch (e) {
