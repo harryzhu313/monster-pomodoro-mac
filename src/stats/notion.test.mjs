@@ -6,6 +6,7 @@ let storedConfig;
 let invokeCalls;
 let requests;
 let fetchHandler;
+let logInvokeError;
 
 function jsonResponse(status, body) {
   return {
@@ -101,7 +102,14 @@ function monthPage(id, start, end, kind = '月') {
 }
 
 function pageList(results, hasMore = false, nextCursor = null) {
-  return { object: 'list', type: 'page', results, has_more: hasMore, next_cursor: nextCursor };
+  return {
+    object: 'list',
+    type: 'page_or_database',
+    page_or_database: {},
+    results,
+    has_more: hasMore,
+    next_cursor: nextCursor,
+  };
 }
 
 function installPreflightHandler({
@@ -118,6 +126,76 @@ function installPreflightHandler({
     }
     const id = path.split('/').at(-1);
     return jsonResponse(200, { title: [{ plain_text: id }] });
+  };
+}
+
+function goalView({
+  id = 'g-1',
+  title = '内参阅读',
+  category = '学习',
+  monthTarget = 20,
+  monthDone = 7,
+} = {}) {
+  return { id, title, category, monthTarget, monthDone, checkedToday: false, locked: false };
+}
+
+function syncSnapshot({ today = TODAY, goals = [goalView()] } = {}) {
+  return { today, monthlyGoals: goals };
+}
+
+function remoteGoalPage(id, goalId, monthPageId = 'aug-page') {
+  return {
+    object: 'page',
+    id,
+    properties: {
+      名称: { type: 'title', title: [{ plain_text: `旧标题 ${goalId}` }] },
+      分类: { type: 'select', select: { name: '工作' } },
+      本月总量: { type: 'number', number: 1 },
+      已完成: { type: 'number', number: 0 },
+      所属月: { type: 'relation', relation: [{ id: monthPageId }] },
+      '本地目标 ID': {
+        type: 'rich_text',
+        rich_text: [{ plain_text: goalId, type: 'text', text: { content: goalId } }],
+      },
+    },
+  };
+}
+
+function asJsonResponse(value) {
+  return value && typeof value.text === 'function' ? value : jsonResponse(200, value);
+}
+
+function installGoalSyncHandler({
+  goal = goalDatabase(),
+  timeframe = timeframeDatabase(),
+  timeframeQuery = () => pageList([monthPage('aug-page', '2026-08-01', '2026-08-31')]),
+  goalQuery = () => pageList([]),
+  create = () => ({ id: 'created-goal-page' }),
+  update = (pageId) => ({ id: pageId }),
+} = {}) {
+  fetchHandler = async (url, init = {}) => {
+    const path = new URL(url).pathname;
+    const method = init.method || 'GET';
+    const body = init.body ? JSON.parse(init.body) : null;
+    if (method === 'GET' && path === `/v1/databases/${IDS.goalDb}`) {
+      return jsonResponse(200, goal);
+    }
+    if (method === 'GET' && path === `/v1/databases/${IDS.timeframeDb}`) {
+      return jsonResponse(200, timeframe);
+    }
+    if (method === 'POST' && path === `/v1/databases/${IDS.timeframeDb}/query`) {
+      return asJsonResponse(await timeframeQuery(body));
+    }
+    if (method === 'POST' && path === `/v1/databases/${IDS.goalDb}/query`) {
+      return asJsonResponse(await goalQuery(body));
+    }
+    if (method === 'POST' && path === '/v1/pages') {
+      return asJsonResponse(await create(body));
+    }
+    if (method === 'PATCH' && path.startsWith('/v1/pages/')) {
+      return asJsonResponse(await update(path.slice('/v1/pages/'.length), body));
+    }
+    return jsonResponse(500, { message: `unexpected request: ${method} ${path}` });
   };
 }
 
@@ -142,7 +220,10 @@ globalThis.window = {
           Object.assign(storedConfig, args?.config || {});
           return null;
         }
-        if (cmd === 'log_notion_export') return null;
+        if (cmd === 'log_notion_export') {
+          if (logInvokeError) throw logInvokeError;
+          return null;
+        }
         throw new Error(`unexpected invoke: ${cmd}`);
       },
     },
@@ -168,6 +249,7 @@ beforeEach(() => {
   };
   invokeCalls = [];
   requests = [];
+  logInvokeError = null;
   installPreflightHandler();
 });
 
@@ -602,6 +684,484 @@ test('missing or invalid Rust snapshot dates fail locally without an HTTP reques
     assert.equal(requests.length, 0);
     assertPreflightReadOnly();
   }
+});
+
+test('monthly sync returns an explicit empty result before every Notion request', async () => {
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [] }));
+
+  assert.deepEqual(result, {
+    ok: true,
+    empty: true,
+    month: '2026-08',
+    created: 0,
+    updated: 0,
+    failed: 0,
+    total: 0,
+    errors: [],
+  });
+  assert.equal(requests.length, 0);
+  assert.deepEqual(invokeCalls, [
+    { cmd: 'get_notion_config', args: undefined },
+    {
+      cmd: 'log_notion_export',
+      args: {
+        date: 'monthly:2026-08',
+        summary: { created: 0, updated: 0, failed: 0 },
+      },
+    },
+  ]);
+});
+
+test('monthly sync keeps preflight failures at zero writes and preserves the prior summary', async () => {
+  const invalidGoalDatabase = goalDatabase();
+  delete invalidGoalDatabase.properties.分类;
+  installGoalSyncHandler({ goal: invalidGoalDatabase });
+
+  await assert.rejects(
+    notion.syncMonthlyGoals(syncSnapshot()),
+    (error) => error?.code === 'property_schema' && /分类/.test(error.message)
+  );
+
+  assert.deepEqual(
+    requests.map(({ url, init }) => [init.method || 'GET', new URL(url).pathname]),
+    [['GET', `/v1/databases/${IDS.goalDb}`]]
+  );
+  assert.equal(requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')), false);
+  assert.deepEqual(invokeCalls.map(({ cmd }) => cmd), ['get_notion_config']);
+});
+
+test('monthly sync creates all six properties from one frozen Rust snapshot and config', async () => {
+  installGoalSyncHandler();
+  const originalGoal = goalView({
+    id: 'g-frozen',
+    title: '内参阅读',
+    category: '学习',
+    monthTarget: 30,
+    monthDone: 8,
+  });
+  const snapshot = syncSnapshot({ goals: [originalGoal] });
+  snapshot.tasksToday = { tasks: [{ title: '不得扫描', used: 999 }] };
+  const baseHandler = fetchHandler;
+  fetchHandler = async (url, init) => {
+    if (requests.length === 1) {
+      storedConfig = {
+        token: 'token-b',
+        taskDbId: 'task-b',
+        dayDbId: 'day-b',
+        goalDbId: '33333333-3333-3333-3333-333333333333',
+      };
+      snapshot.today = '2026-09-01';
+      originalGoal.title = '执行中被改名';
+      originalGoal.category = '工作';
+      originalGoal.monthTarget = 99;
+      originalGoal.monthDone = 99;
+    }
+    return baseHandler(url, init);
+  };
+
+  const result = await notion.syncMonthlyGoals(snapshot);
+  assert.equal(result.ok, true);
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.month, '2026-08');
+  assert.equal(
+    invokeCalls.filter(({ cmd }) => cmd === 'get_notion_config').length,
+    1
+  );
+  assert.deepEqual(
+    requests.map(({ init }) => init.headers.Authorization),
+    requests.map(() => 'Bearer token-a')
+  );
+  for (const { url, init } of requests) {
+    assert.equal(new URL(url).host, 'api.notion.com');
+    assert.equal(init.headers['Notion-Version'], '2022-06-28');
+    assert.equal(init.headers['Content-Type'], 'application/json');
+  }
+
+  const goalQueryRequest = requests.find(({ url }) => (
+    new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`
+  ));
+  assert.deepEqual(JSON.parse(goalQueryRequest.init.body), {
+    filter: { property: '所属月', relation: { contains: 'aug-page' } },
+    page_size: 100,
+  });
+
+  const createRequest = requests.find(({ url, init }) => (
+    new URL(url).pathname === '/v1/pages' && init.method === 'POST'
+  ));
+  const createBody = JSON.parse(createRequest.init.body);
+  assert.deepEqual(createBody.parent, { type: 'database_id', database_id: IDS.goalDb });
+  assert.deepEqual(createBody.properties, {
+    名称: { title: [{ type: 'text', text: { content: '2026-08 · 内参阅读' } }] },
+    分类: { select: { name: '学习' } },
+    本月总量: { number: 30 },
+    已完成: { number: 8 },
+    所属月: { relation: [{ id: 'aug-page' }] },
+    '本地目标 ID': {
+      rich_text: [{ type: 'text', text: { content: 'g-frozen' } }],
+    },
+  });
+  assert.deepEqual(invokeCalls.at(-1), {
+    cmd: 'log_notion_export',
+    args: {
+      date: 'monthly:2026-08',
+      summary: { created: 1, updated: 0, failed: 0 },
+    },
+  });
+});
+
+test('same-month stable ID updates the original page after rename and rewrites all six properties', async () => {
+  let updatedPage = null;
+  let updatedBody = null;
+  installGoalSyncHandler({
+    goalQuery: () => pageList([remoteGoalPage('existing-page', 'g-stable')]),
+    update: (pageId, body) => {
+      updatedPage = pageId;
+      updatedBody = body;
+      return { id: pageId };
+    },
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [goalView({
+    id: 'g-stable',
+    title: '网站建设（新版）',
+    category: '工作',
+    monthTarget: 45,
+    monthDone: 12,
+  })] }));
+
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(updatedPage, 'existing-page');
+  assert.deepEqual(Object.keys(updatedBody), ['properties']);
+  assert.deepEqual(Object.keys(updatedBody.properties).sort(), [
+    '名称', '分类', '已完成', '所属月', '本地目标 ID', '本月总量',
+  ].sort());
+  assert.equal(
+    updatedBody.properties.名称.title[0].text.content,
+    '2026-08 · 网站建设（新版）'
+  );
+  assert.equal(updatedBody.properties.分类.select.name, '工作');
+  assert.equal(updatedBody.properties.本月总量.number, 45);
+  assert.equal(updatedBody.properties.已完成.number, 12);
+  assert.deepEqual(updatedBody.properties.所属月.relation, [{ id: 'aug-page' }]);
+  assert.equal(updatedBody.properties['本地目标 ID'].rich_text[0].text.content, 'g-stable');
+  assert.equal(
+    requests.some(({ url, init }) => new URL(url).pathname === '/v1/pages' && init.method === 'POST'),
+    false
+  );
+});
+
+test('the same local goal ID creates an independent snapshot in a new month', async () => {
+  const remotePages = [];
+  installGoalSyncHandler({
+    timeframeQuery: () => pageList([
+      monthPage('aug-page', '2026-08-01', '2026-08-31'),
+      monthPage('sep-page', '2026-09-01', '2026-09-30'),
+    ]),
+    goalQuery: (body) => pageList(remotePages.filter((page) => (
+      page.properties.所属月.relation[0].id === body.filter.relation.contains
+    ))),
+    create: (body) => {
+      const id = `remote-${remotePages.length + 1}`;
+      remotePages.push({ object: 'page', id, properties: body.properties });
+      return { id };
+    },
+  });
+
+  const august = await notion.syncMonthlyGoals(syncSnapshot({
+    today: '2026-08-25',
+    goals: [goalView({ id: 'g-cross-month' })],
+  }));
+  const september = await notion.syncMonthlyGoals(syncSnapshot({
+    today: '2026-09-10',
+    goals: [goalView({ id: 'g-cross-month', monthDone: 2 })],
+  }));
+
+  assert.equal(august.created, 1);
+  assert.equal(september.created, 1);
+  assert.equal(remotePages.length, 2);
+  assert.deepEqual(
+    remotePages.map((page) => page.properties.所属月.relation[0].id),
+    ['aug-page', 'sep-page']
+  );
+  assert.deepEqual(
+    remotePages.map((page) => page.properties.名称.title[0].text.content),
+    ['2026-08 · 内参阅读', '2026-09 · 内参阅读']
+  );
+  const goalQueryBodies = requests
+    .filter(({ url }) => new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`)
+    .map(({ init }) => JSON.parse(init.body));
+  assert.deepEqual(
+    goalQueryBodies.map((body) => body.filter.relation.contains),
+    ['aug-page', 'sep-page']
+  );
+});
+
+test('monthly record pagination finishes before updating a match from a later page', async () => {
+  installGoalSyncHandler({
+    goalQuery: (body) => body.start_cursor
+      ? pageList([remoteGoalPage('later-page', 'g-later')])
+      : pageList([], true, 'goal-cursor-1'),
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({
+    goals: [goalView({ id: 'g-later' })],
+  }));
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 1);
+
+  const goalQueryBodies = requests
+    .filter(({ url }) => new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`)
+    .map(({ init }) => JSON.parse(init.body));
+  assert.deepEqual(goalQueryBodies, [
+    {
+      filter: { property: '所属月', relation: { contains: 'aug-page' } },
+      page_size: 100,
+    },
+    {
+      filter: { property: '所属月', relation: { contains: 'aug-page' } },
+      page_size: 100,
+      start_cursor: 'goal-cursor-1',
+    },
+  ]);
+  const secondQueryIndex = requests.findLastIndex(({ url }) => (
+    new URL(url).pathname === `/v1/databases/${IDS.goalDb}/query`
+  ));
+  const patchIndex = requests.findIndex(({ init }) => init.method === 'PATCH');
+  assert.equal(secondQueryIndex < patchIndex, true);
+});
+
+test('a malformed later query page aborts before every create or update', async () => {
+  installGoalSyncHandler({
+    goalQuery: (body) => body.start_cursor
+      ? { object: 'list', results: null, has_more: false, next_cursor: null }
+      : pageList([], true, 'broken-page-cursor'),
+  });
+
+  await assert.rejects(
+    notion.syncMonthlyGoals(syncSnapshot()),
+    (error) => error?.code === 'goal_query_shape'
+  );
+  assert.equal(
+    requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')),
+    false
+  );
+  assert.equal(
+    invokeCalls.some(({ cmd }) => cmd === 'log_notion_export'),
+    false
+  );
+});
+
+test('duplicate local goal IDs are all skipped before writes while unique goals continue', async () => {
+  const createdGoalIds = [];
+  installGoalSyncHandler({
+    create: (body) => {
+      createdGoalIds.push(body.properties['本地目标 ID'].rich_text[0].text.content);
+      return { id: `created-${createdGoalIds.length}` };
+    },
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [
+    goalView({ id: 'g-local-duplicate', title: '重复一' }),
+    goalView({ id: 'g-local-duplicate', title: '重复二' }),
+    goalView({ id: 'g-local-unique', title: '唯一目标' }),
+  ] }));
+
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 2);
+  assert.deepEqual(result.errors.map(({ code }) => code), [
+    'duplicate_local_goal',
+    'duplicate_local_goal',
+  ]);
+  assert.deepEqual(createdGoalIds, ['g-local-unique']);
+});
+
+test('duplicate remote keys split across pages are detected only after full pagination', async () => {
+  installGoalSyncHandler({
+    goalQuery: (body) => body.start_cursor
+      ? pageList([remoteGoalPage('duplicate-page-b', 'g-cross-page-duplicate')])
+      : pageList(
+        [remoteGoalPage('duplicate-page-a', 'g-cross-page-duplicate')],
+        true,
+        'duplicate-cursor'
+      ),
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({
+    goals: [goalView({ id: 'g-cross-page-duplicate' })],
+  }));
+
+  assert.equal(result.created, 0);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.errors[0].code, 'duplicate_remote_goal');
+  assert.equal(
+    requests.some(({ url }) => new URL(url).pathname.startsWith('/v1/pages')),
+    false
+  );
+});
+
+test('duplicate remote keys fail only that goal and never patch either duplicate page', async () => {
+  const createdGoalIds = [];
+  installGoalSyncHandler({
+    goalQuery: () => pageList([
+      remoteGoalPage('duplicate-a', 'g-duplicate'),
+      remoteGoalPage('duplicate-b', 'g-duplicate'),
+    ]),
+    create: (body) => {
+      createdGoalIds.push(body.properties['本地目标 ID'].rich_text[0].text.content);
+      return { id: 'created-legal' };
+    },
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [
+    goalView({ id: 'g-duplicate', title: '重复目标' }),
+    goalView({ id: 'g-legal', title: '正常目标', category: '生活' }),
+  ] }));
+
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.errors[0].code, 'duplicate_remote_goal');
+  assert.deepEqual(createdGoalIds, ['g-legal']);
+  assert.equal(requests.some(({ init }) => init.method === 'PATCH'), false);
+});
+
+test('remote records for locally deleted goals are never updated, archived, or deleted', async () => {
+  const createdGoalIds = [];
+  installGoalSyncHandler({
+    goalQuery: () => pageList([remoteGoalPage('orphan-page', 'g-deleted-locally')]),
+    create: (body) => {
+      createdGoalIds.push(body.properties['本地目标 ID'].rich_text[0].text.content);
+      return { id: 'new-current-page' };
+    },
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({
+    goals: [goalView({ id: 'g-current' })],
+  }));
+
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(createdGoalIds, ['g-current']);
+  assert.equal(requests.some(({ init }) => init.method === 'PATCH'), false);
+  assert.equal(requests.some(({ init }) => init.method === 'DELETE'), false);
+  assert.equal(requests.some(({ init }) => /"archived"/.test(init.body || '')), false);
+});
+
+test('an invalid snapshot category fails without falling back to 工作 while other goals continue', async () => {
+  const createdCategories = [];
+  installGoalSyncHandler({
+    create: (body) => {
+      createdCategories.push(body.properties.分类.select.name);
+      return { id: `created-${createdCategories.length}` };
+    },
+  });
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot({ goals: [
+    goalView({ id: 'g-invalid-category', category: '其它' }),
+    goalView({ id: 'g-valid-category', category: '兴趣爱好' }),
+  ] }));
+
+  assert.equal(result.created, 1);
+  assert.equal(result.failed, 1);
+  assert.equal(result.errors[0].code, 'invalid_category');
+  assert.deepEqual(createdCategories, ['兴趣爱好']);
+  assert.equal(createdCategories.includes('工作'), false);
+});
+
+test('a lost create response is recovered by a fresh query without creating duplicates', async () => {
+  const remotePages = [];
+  let loseFirstResponse = true;
+  let updates = 0;
+  installGoalSyncHandler({
+    goalQuery: () => pageList(remotePages),
+    create: (body) => {
+      const goalId = body.properties['本地目标 ID'].rich_text[0].text.content;
+      const id = `remote-${goalId}`;
+      remotePages.push({ object: 'page', id, properties: body.properties });
+      if (goalId === 'g-lost' && loseFirstResponse) {
+        loseFirstResponse = false;
+        return jsonResponse(500, { message: 'response lost after create' });
+      }
+      return { id };
+    },
+    update: (pageId, body) => {
+      updates++;
+      const page = remotePages.find((item) => item.id === pageId);
+      page.properties = body.properties;
+      return { id: pageId };
+    },
+  });
+  const snapshot = syncSnapshot({ goals: [
+    goalView({ id: 'g-lost', title: '响应丢失' }),
+    goalView({ id: 'g-ok', title: '继续执行' }),
+  ] });
+
+  const first = await notion.syncMonthlyGoals(snapshot);
+  assert.equal(first.created, 1);
+  assert.equal(first.updated, 0);
+  assert.equal(first.failed, 1);
+  assert.equal(remotePages.length, 2);
+
+  const second = await notion.syncMonthlyGoals(snapshot);
+  assert.equal(second.created, 0);
+  assert.equal(second.updated, 2);
+  assert.equal(second.failed, 0);
+  assert.equal(second.ok, true);
+  assert.equal(remotePages.length, 2);
+  assert.equal(updates, 2);
+  assert.equal(
+    requests.filter(({ url, init }) => new URL(url).pathname === '/v1/pages' && init.method === 'POST').length,
+    2
+  );
+  const monthlyLogs = invokeCalls.filter(({ cmd }) => cmd === 'log_notion_export');
+  assert.deepEqual(monthlyLogs.map(({ args }) => args), [
+    {
+      date: 'monthly:2026-08',
+      summary: { created: 1, updated: 0, failed: 1 },
+    },
+    {
+      date: 'monthly:2026-08',
+      summary: { created: 0, updated: 2, failed: 0 },
+    },
+  ]);
+  const persisted = JSON.stringify(monthlyLogs);
+  assert.equal(persisted.includes('g-lost'), false);
+  assert.equal(persisted.includes('响应丢失'), false);
+  assert.equal(persisted.includes('response lost after create'), false);
+  assert.equal(persisted.includes('remote-g-lost'), false);
+});
+
+test('summary persistence failure does not change successful remote write counts', async () => {
+  installGoalSyncHandler();
+  logInvokeError = new Error('store unavailable');
+
+  const result = await notion.syncMonthlyGoals(syncSnapshot());
+  assert.equal(result.ok, true);
+  assert.equal(result.created, 1);
+  assert.equal(result.updated, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(Object.hasOwn(result, 'historySaved'), false);
+  assert.equal(
+    requests.filter(({ url, init }) => new URL(url).pathname === '/v1/pages' && init.method === 'POST').length,
+    1
+  );
+  assert.deepEqual(invokeCalls.at(-1), {
+    cmd: 'log_notion_export',
+    args: {
+      date: 'monthly:2026-08',
+      summary: { created: 1, updated: 0, failed: 0 },
+    },
+  });
+  assert.equal(JSON.stringify(invokeCalls.at(-1)).includes('token-a'), false);
+  assert.equal(JSON.stringify(invokeCalls.at(-1)).includes(IDS.goalDb), false);
+  assert.equal(JSON.stringify(invokeCalls.at(-1)).includes('内参阅读'), false);
 });
 
 test('daily export ignores goalDbId and keeps its existing request flow', async () => {

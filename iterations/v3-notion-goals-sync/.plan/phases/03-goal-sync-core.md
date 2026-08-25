@@ -1,6 +1,6 @@
 # Phase 03 — 月度目标幂等同步核心
 
-**Status**: `not started`
+**Status**: `completed`
 **目标**: 用稳定复合键实现可测试、可重试的当前月目标 upsert，不依赖真实 Notion 写入即可证明核心正确
 **前置**: Phase 02 已验收并提交
 
@@ -18,13 +18,13 @@
 
 ## Tasks
 
-- [ ] 定义纯函数形式的月份键、标题、六属性 payload 与远端记录解析，分类只接受项目四个常量，无效值返回该目标错误
-- [ ] 实现按唯一月份 relation 分页查询远端记录，并按本地目标 ID 建立 `0 / 1 / many` 索引
-- [ ] 实现 create/update 编排、逐条错误隔离、重复键冲突和确定性的新增/更新/失败摘要
-- [ ] 在同步入口冻结 Notion 配置和 Rust 目标快照，禁止循环中再次读取可变配置或系统日期
-- [ ] 将最近一次月度摘要写入 `notionExportLog` 的月份命名空间，并保证摘要记录失败不会把已完成的远端写入误报为整体失败
-- [ ] 使用可注入 mock fetch 编写无新依赖的 JS 单元测试，覆盖验收判据中的所有分支
-- [ ] 运行 JS 测试、Rust 测试、前端语法检查和 `git diff --check`，记录具体 evidence
+- [x] 定义纯函数形式的月份键、标题、六属性 payload 与远端记录解析，分类只接受项目四个常量，无效值返回该目标错误（`src/stats/notion.js:537-652`）
+- [x] 实现按唯一月份 relation 分页查询远端记录，并按本地目标 ID 建立 `0 / 1 / many` 索引（`src/stats/notion.js:609-704`）
+- [x] 实现 create/update 编排、逐条错误隔离、重复键冲突和确定性的新增/更新/失败摘要（`src/stats/notion.js:741-836`）
+- [x] 在同步入口冻结 Notion 配置和 Rust 目标快照，禁止循环中再次读取可变配置或系统日期（`src/stats/notion.js:549-574,741-761`）
+- [x] 将最近一次月度摘要写入 `notionExportLog` 的月份命名空间，并保证摘要记录失败不会把已完成的远端写入误报为整体失败（`src/stats/notion.js:717-735`）
+- [x] 使用可注入 mock fetch 编写无新依赖的 JS 单元测试，覆盖验收判据中的所有分支（`src/stats/notion.test.mjs:689-1165`）
+- [x] 运行 JS 测试、Rust 测试、前端语法检查和 `git diff --check`，记录具体 evidence
 
 ## Notes
 
@@ -32,3 +32,8 @@
 - 不保存 `{month, goalId} → pageId` 本地映射。远端查询结果是每次同步的事实来源，可避免 page 被用户移动或删除后产生陈旧映射。
 - 本地删除目标时，目标不会进入后续 payload；核心不得生成删除或归档远端页面的请求。
 - 不复用标题去重。本地目标允许改名，标题只用于展示。
+- 自测（2026-08-25）：`node --test src/stats/notion.test.mjs` **31 passed / 0 failed**；`cargo test` **44 passed / 0 failed**；ES module 语法检查、`git diff --check` 与 Cargo 依赖零改动检查均通过。
+- mock 覆盖首次新建、同月更新与改名、跨月同 ID、新建响应丢失后的安全重试、远端与本地重复 ID、跨页重复、畸形后续分页零写入、空目标、非法分类、部分失败、孤儿页不删除、固定 2022 请求头及失败摘要脱敏。
+- 配置与 Rust payload 在首次 await 前后分别复制冻结；测试在执行中篡改原对象，全部请求仍使用同一 Token、目标库、月份和五个 GoalView 字段，且不扫描任务数据。
+- 最近摘要只向 `monthly:YYYY-MM` 写入 `created / updated / failed`；Rust 继续负责追加时间。日志为 best-effort，不对外承诺磁盘落盘状态，也不改变已发生的远端计数。
+- 独立代码、测试与安全复审均无 P0 / P1 / P2 遗留。用户于 2026-08-25 验收通过；尚未接入 UI，也未向真实 Notion 写入任何记录。
