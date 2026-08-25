@@ -143,7 +143,9 @@ fn set_tray_title(app: &AppHandle, title: Option<String>, phase: store::TimerPha
     };
     let _ = app.run_on_main_thread(move || {
         if let Some(tray) = app2.tray_by_id("main") {
-            let _ = tray.set_title(title.as_deref());
+            // tray-icon 0.24.1 的 macOS 实现里 set_title(None) 是静默 no-op(只写 Some 分支),
+            // 回 idle 时残留旧标题(如放弃后冻在"⏸ 25:00");映射成空串才能真正清掉
+            let _ = tray.set_title(Some(title.as_deref().unwrap_or("")));
             if icon_changed {
                 if let Ok(img) = Image::from_bytes(tray_icon_bytes(phase)) {
                     let _ = tray.set_icon(Some(img));
