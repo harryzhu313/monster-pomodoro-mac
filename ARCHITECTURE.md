@@ -6,6 +6,7 @@
 ## 1. 运行时与语言
 
 - **Tauri 2.x**,目标 macOS 13+。理由:前端资产最大化复用旧插件、产物 ~10MB、常驻内存小,符合"菜单栏常驻不碍眼"的定位。
+- **macOS 27 兼容基线（2026-10-21）**：Tauri `~2.12.4`，间接依赖 `tray-icon` 至少 `0.25.1`，具体版本由 `Cargo.lock` 锁定。旧 `tauri 2.11.5 / tray-icon 0.24.1` 在 macOS 27 中会丢失带菜单托盘的左键事件；采用上游修复（[Tauri #16035](https://github.com/tauri-apps/tauri/issues/16035)、[tray-icon #365](https://github.com/tauri-apps/tray-icon/pull/365)），保留左键切换面板、右键原生菜单的产品行为。隔离开发版已通过自动回归及用户手动验收，并经用户授权安装到唯一正式入口；正式版也已通过用户验收，左键面板与原数据正常。过程见 `iterations/v4-macos27-compat/.plan/`。
 - **后端 Rust**(Tauri 壳):计时状态机、持久化、音频、托盘、窗口管理、系统集成。
 - **前端 vanilla JS(ES modules)+ CSS 变量,无构建工具**——延续旧版"无构建"哲学。`tauri.conf.json` 设 `app.withGlobalTauri: true`,前端直接用 `window.__TAURI__` 调 IPC,不引入 npm bundler。
 - **不用 TypeScript**:无构建约定优先;复杂数据结构用 JSDoc 注释表达类型。
